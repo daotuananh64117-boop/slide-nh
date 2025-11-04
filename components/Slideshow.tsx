@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Slide, AspectRatio, TransitionEffect } from '../types';
-import { ChevronLeftIcon, ChevronRightIcon, PlayIcon, PauseIcon } from './Icons';
+import { ChevronLeftIcon, ChevronRightIcon, PlayIcon, PauseIcon, ExclamationTriangleIcon } from './Icons';
 
 interface SlideshowProps {
   slides: Slide[];
@@ -38,7 +38,7 @@ const Slideshow: React.FC<SlideshowProps> = ({ slides, duration, aspectRatio }) 
     if (progressAnimationRef.current) cancelAnimationFrame(progressAnimationRef.current);
     setProgress(0);
 
-    if (slides.length > 0 && slides[0].imageUrl) {
+    if (slides.length > 0) {
       setTransitionState([{ slide: slides[0], classes: 'slide active' }]);
     } else {
       setTransitionState([]);
@@ -53,7 +53,7 @@ const Slideshow: React.FC<SlideshowProps> = ({ slides, duration, aspectRatio }) 
       cancelAnimationFrame(progressAnimationRef.current);
     }
 
-    if (isPlaying && duration > 0 && slides.length > 0) {
+    if (isPlaying && duration > 0 && slides.length > 0 && slides[currentIndex]?.imageUrl && slides[currentIndex].imageUrl !== 'error') {
       slideStartTimeRef.current = performance.now();
       
       const animateProgress = (timestamp: number) => {
@@ -76,11 +76,11 @@ const Slideshow: React.FC<SlideshowProps> = ({ slides, duration, aspectRatio }) 
         cancelAnimationFrame(progressAnimationRef.current);
       }
     };
-  }, [isPlaying, currentIndex, duration, slides.length]);
+  }, [isPlaying, currentIndex, duration, slides]);
   
   const runTransition = (newIndex: number) => {
     const oldIndex = currentIndex;
-    if (newIndex === oldIndex || slides.length < 2 || !slides[oldIndex]?.imageUrl || !slides[newIndex]?.imageUrl) return;
+    if (newIndex === oldIndex || slides.length < 2) return;
     
     if (cleanupTimeoutRef.current) clearTimeout(cleanupTimeoutRef.current);
     if (autoplayTimeoutRef.current) clearTimeout(autoplayTimeoutRef.current);
@@ -92,7 +92,10 @@ const Slideshow: React.FC<SlideshowProps> = ({ slides, duration, aspectRatio }) 
     
     setTransitionState(currentState => {
         const currentActive = currentState.find(s => s.classes.includes('active'));
-        if (!currentActive) return []; // Should not happen if initialized correctly.
+        if (!currentActive) {
+           // If nothing is active, just bring in the new slide
+           return [{ slide: slides[newIndex], classes: `slide active ${inClass}` }];
+        }
 
         const previous = { ...currentActive, classes: `slide previous ${outClass}` };
         const next = { slide: slides[newIndex], classes: `slide active ${inClass}` };
@@ -115,7 +118,7 @@ const Slideshow: React.FC<SlideshowProps> = ({ slides, duration, aspectRatio }) 
   // Autoplay effect, separated from other logic.
   useEffect(() => {
     if (autoplayTimeoutRef.current) clearTimeout(autoplayTimeoutRef.current);
-    if (isPlaying && slides.length > 1 && duration > 0) {
+    if (isPlaying && slides.length > 1 && duration > 0 && slides.every(s => s.imageUrl && s.imageUrl !== 'error')) {
       autoplayTimeoutRef.current = setTimeout(() => {
         const newIndex = (currentIndex + 1) % slides.length;
         runTransition(newIndex);
@@ -156,6 +159,8 @@ const Slideshow: React.FC<SlideshowProps> = ({ slides, duration, aspectRatio }) 
   };
 
   const togglePlay = () => {
+    // Prevent play if images are still loading/error
+    if (slides.some(s => !s.imageUrl || s.imageUrl === 'error')) return;
     setIsPlaying(!isPlaying);
   };
   
@@ -171,10 +176,30 @@ const Slideshow: React.FC<SlideshowProps> = ({ slides, duration, aspectRatio }) 
       <div className={`w-full overflow-hidden bg-slate-800 rounded-lg shadow-lg relative ${aspectRatio === '16:9' ? 'aspect-video' : 'aspect-[9/16]'}`}>
         {transitionState.map(({ slide, classes }) => (
           <div
-            key={slide.imageUrl} // Use stable image URL as key
+            key={slide.id}
             className={classes}
-            style={{ backgroundImage: `url(${slide.imageUrl})` }}
-          />
+            style={{ 
+              backgroundImage: slide.imageUrl && slide.imageUrl !== 'error' ? `url(${slide.imageUrl})` : 'none',
+              backgroundColor: '#1e293b' // slate-800 for fallback
+            }}
+          >
+            {(!slide.imageUrl || slide.imageUrl === 'error') && (
+              <div className="absolute inset-0 flex items-center justify-center bg-slate-800/50 p-4">
+                {!slide.imageUrl ? (
+                  <svg className="animate-spin h-8 w-8 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                ) : (
+                  <div className="text-center text-red-300">
+                    <ExclamationTriangleIcon className="w-10 h-10 mx-auto mb-2 text-red-400" />
+                    <p className="text-sm font-semibold">Không thể tạo ảnh</p>
+                    <p className="text-xs mt-1 opacity-80 break-words">{slide.error || 'Đã xảy ra lỗi không xác định.'}</p>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         ))}
       </div>
 
@@ -195,19 +220,19 @@ const Slideshow: React.FC<SlideshowProps> = ({ slides, duration, aspectRatio }) 
       <div className="absolute bottom-0 left-0 right-0 p-4 flex flex-col justify-end bg-gradient-to-t from-black/60 to-transparent">
         {slides.length > 1 && (
           <div className="w-full h-1.5 flex items-center gap-1 cursor-pointer mb-3">
-            {slides.map((_, index) => (
+            {slides.map((slide, index) => (
               <div
-                key={index}
+                key={slide.id}
                 onClick={() => handleProgressClick(index)}
                 className="flex-1 h-full bg-white/30 rounded-full overflow-hidden"
                 role="button"
                 aria-label={`Go to slide ${index + 1}`}
               >
                 <div 
-                  className="h-full bg-white rounded-full"
+                  className={`h-full rounded-full ${slide.imageUrl === 'error' ? 'bg-red-500' : 'bg-white'}`}
                   style={{ 
-                    width: index < currentIndex ? '100%' : (index === currentIndex ? `${progress}%` : '0%'),
-                    transition: index === currentIndex ? 'width 50ms linear' : 'none'
+                    width: slide.imageUrl === 'error' ? '100%' : (index < currentIndex ? '100%' : (index === currentIndex ? `${progress}%` : '0%')),
+                    transition: index === currentIndex && slide.imageUrl !== 'error' ? 'width 50ms linear' : 'none'
                   }}
                 />
               </div>
@@ -216,7 +241,7 @@ const Slideshow: React.FC<SlideshowProps> = ({ slides, duration, aspectRatio }) 
         )}
 
         <div className="flex items-center justify-between">
-          <button onClick={togglePlay} className="p-2 bg-black/50 rounded-full text-white hover:bg-black/75 focus:outline-none focus:ring-2 focus:ring-white">
+          <button onClick={togglePlay} className="p-2 bg-black/50 rounded-full text-white hover:bg-black/75 focus:outline-none focus:ring-2 focus:ring-white disabled:opacity-50 disabled:cursor-not-allowed" disabled={slides.some(s => !s.imageUrl || s.imageUrl === 'error')}>
             {isPlaying ? <PauseIcon className="w-5 h-5" /> : <PlayIcon className="w-5 h-5" />}
           </button>
           <div className="text-white text-sm bg-black/50 px-2 py-1 rounded-md">

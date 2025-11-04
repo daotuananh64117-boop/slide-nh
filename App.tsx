@@ -1,10 +1,9 @@
-
 import React, { useState } from 'react';
 import ScriptInput from './components/ScriptInput';
 import Slideshow from './components/Slideshow';
 import { FilmIcon, DownloadIcon } from './components/Icons';
 import { AspectRatio, Slide, TransitionEffect, Scene } from './types';
-import { generateScenesFromScript } from './services/geminiService';
+import { generateScenesFromScript, generateImageForScene } from './services/geminiService';
 
 const App: React.FC = () => {
   const [slides, setSlides] = useState<Slide[]>([]);
@@ -25,7 +24,7 @@ const App: React.FC = () => {
     setSlides([]);
 
     try {
-      // 1. Call Gemini AI to analyze the script and create scenes
+      // 1. Gọi AI của Gemini để phân tích kịch bản và tạo cảnh
       const scenes: Scene[] = await generateScenesFromScript(script);
 
       if (scenes.length === 0) {
@@ -34,38 +33,46 @@ const App: React.FC = () => {
       
       const transitions: TransitionEffect[] = ['fade', 'slide-left', 'zoom-in'];
 
-      const generateImageUrl = (aspectRatio: AspectRatio): string => {
-        let width, height;
-        if (aspectRatio === '16:9') {
-          width = 1280;
-          height = 720;
-        } else { // 9:16
-          width = 720;
-          height = 1280;
-        }
-        // Use Lorem Picsum for fast, free placeholder images
-        return `https://picsum.photos/${width}/${height}?random=${Math.random()}`;
-      };
-
-      // 2. Create slides from scenes.
-      const newSlides: Slide[] = scenes.map((scene) => ({
-        imageUrl: generateImageUrl(aspectRatio),
+      // 2. Tạo cấu trúc slide ban đầu không có hình ảnh
+      const initialSlides: Slide[] = scenes.map((scene, index) => ({
+        id: `slide-${index}-${Date.now()}`,
+        imageUrl: '', // Ban đầu trống, sẽ được điền vào dần dần
         text: scene.description,
         transition: transitions[Math.floor(Math.random() * transitions.length)],
       }));
       
-      setSlides(newSlides);
+      setSlides(initialSlides);
+      setIsLoading(false); // Dừng tải chính, hiển thị các slide trống
+
+      // 3. Tạo hình ảnh cho mỗi slide trong nền
+      scenes.forEach(async (scene, index) => {
+        try {
+          const imageUrl = await generateImageForScene(scene.description);
+          setSlides(prevSlides => 
+            prevSlides.map((slide, i) => 
+              i === index ? { ...slide, imageUrl, error: undefined } : slide
+            )
+          );
+        } catch (imageError: any) {
+          console.error(`Không thể tạo hình ảnh cho slide ${index + 1}:`, imageError);
+          // Cập nhật slide cụ thể để hiển thị trạng thái lỗi
+          setSlides(prevSlides => 
+            prevSlides.map((slide, i) => 
+              i === index ? { ...slide, imageUrl: 'error', error: imageError.message } : slide
+            )
+          );
+        }
+      });
 
     } catch (err: any) {
       setError(err.message || 'Đã xảy ra lỗi không mong muốn.');
-    } finally {
-      setIsLoading(false);
+      setIsLoading(false); // Cũng dừng tải khi có lỗi ban đầu
     }
   };
 
   const handleDownload = async () => {
-    if (slides.length === 0 || slides.some(s => !s.imageUrl)) {
-      setError("Vui lòng đợi tất cả hình ảnh được tạo xong trước khi tải về.");
+    if (slides.length === 0 || slides.some(s => !s.imageUrl || s.imageUrl === 'error')) {
+      setError("Vui lòng đợi tất cả hình ảnh được tạo xong và không có lỗi trước khi tải về.");
       return;
     }
     setIsDownloading(true);
@@ -95,48 +102,17 @@ const App: React.FC = () => {
         throw new Error("Không thể tạo video. Canvas context không được hỗ trợ.");
       }
 
-      const loadImage = async (src: string): Promise<HTMLImageElement> => {
-        const MAX_RETRIES = 3;
-        const RETRY_DELAY = 1000; // 1 second
-
-        for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-            try {
-                const url = new URL(src);
-                // Use a unique cache-busting param for each attempt
-                url.searchParams.set('cachebust', `${Date.now()}-${attempt}`);
-                
-                const response = await fetch(url.toString(), { cache: 'no-store' });
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
-                const blob = await response.blob();
-                
-                const objectUrl = URL.createObjectURL(blob);
-
-                return new Promise((resolve, reject) => {
-                    const img = new Image();
-                    img.onload = () => {
-                        URL.revokeObjectURL(objectUrl);
-                        resolve(img);
-                    };
-                    img.onerror = () => {
-                        URL.revokeObjectURL(objectUrl);
-                        reject(new Error(`Không thể giải mã hình ảnh từ ${src}.`));
-                    };
-                    img.src = objectUrl;
-                });
-            } catch (error) {
-                console.warn(`Lần thử ${attempt} thất bại cho ${src}:`, error);
-                if (attempt === MAX_RETRIES) {
-                    console.error(`Không thể tải hình ảnh từ ${src} sau ${MAX_RETRIES} lần thử:`, error);
-                    throw new Error(`Không thể tải hình ảnh từ ${src}. Vui lòng kiểm tra kết nối mạng của bạn và thử lại.`);
-                }
-                // Wait before the next retry, with increasing delay
-                await new Promise(res => setTimeout(res, RETRY_DELAY * attempt));
-            }
-        }
-        // This line should theoretically be unreachable if MAX_RETRIES > 0
-        throw new Error(`Tải hình ảnh ${src} thất bại không mong muốn.`);
+      const loadImage = (src: string): Promise<HTMLImageElement> => {
+          return new Promise((resolve, reject) => {
+              const img = new Image();
+              // For base64 URLs, we don't need CORS or cache busting
+              if (!src.startsWith('data:')) {
+                  img.crossOrigin = "anonymous";
+              }
+              img.onload = () => resolve(img);
+              img.onerror = () => reject(new Error(`Không thể tải hình ảnh.`));
+              img.src = src;
+          });
       };
 
       const drawImageFit = (ctx: CanvasRenderingContext2D, img: HTMLImageElement, scale = 1, offsetX = 0, offsetY = 0) => {
@@ -244,25 +220,27 @@ const App: React.FC = () => {
             
             recorder.start();
             
+            const FRAME_RATE = 30; // Giảm tốc độ khung hình để tăng hiệu suất
+            const FRAME_DURATION_MS = 1000 / FRAME_RATE;
             let virtualTimeMs = 0;
-            const FRAME_DURATION_MS = 1000 / 60; // Render at 60fps
 
-            const renderLoop = () => {
-                if (virtualTimeMs >= totalVideoDurationMs) {
-                    if (recorder.state === 'recording') {
-                        recorder.stop();
-                    }
-                    return;
-                }
-                
+            // Vòng lặp render chính xác hơn
+            while (virtualTimeMs < totalVideoDurationMs) {
                 renderFrame(virtualTimeMs);
                 virtualTimeMs += FRAME_DURATION_MS;
 
-                // Use setTimeout to yield but process faster than real-time.
-                setTimeout(renderLoop, 0); 
-            };
-
-            setTimeout(renderLoop, 0);
+                // Tạm dừng để event loop chạy, tránh làm treo trình duyệt
+                if (Math.round(virtualTimeMs) % 250 < FRAME_DURATION_MS) {
+                    await new Promise(r => setTimeout(r, 0));
+                }
+            }
+            
+            // Render khung hình cuối cùng để đảm bảo video có đủ thời lượng
+            renderFrame(totalVideoDurationMs);
+            
+            if (recorder.state === 'recording') {
+                recorder.stop(); // onstop sẽ gọi resolve()
+            }
 
         } catch(err) {
             reject(err);
@@ -313,11 +291,11 @@ const App: React.FC = () => {
 
           <div className="mt-8">
             <Slideshow slides={slides} duration={previewSlideDuration} aspectRatio={aspectRatio} />
-            {slides.length > 0 && !isLoading && (
+            {slides.length > 0 && (
               <div className="mt-6 text-center">
                 <button
                   onClick={handleDownload}
-                  disabled={isDownloading || slides.some(s => !s.imageUrl)}
+                  disabled={isDownloading || slides.some(s => !s.imageUrl || s.imageUrl === 'error')}
                   className="inline-flex items-center justify-center px-6 py-3 border border-transparent text-base font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-slate-900 focus:ring-green-500 disabled:bg-green-500/50 disabled:cursor-not-allowed transition-colors duration-200"
                 >
                   {isDownloading ? (
@@ -341,7 +319,7 @@ const App: React.FC = () => {
         </main>
         
         <footer className="text-center mt-12 text-slate-500 text-sm">
-          <p>Hình ảnh được cung cấp bởi Lorem Picsum. Giao diện được lấy cảm hứng từ các công cụ tạo video AI khác nhau.</p>
+          <p>Hình ảnh được tạo bởi AI của Google. Giao diện được lấy cảm hứng từ các công cụ tạo video AI khác nhau.</p>
         </footer>
       </div>
     </div>

@@ -6,7 +6,9 @@ export interface Scene {
 }
 
 export interface Slide {
+  id: string;
   imageUrl: string;
   transition: TransitionEffect;
   text: string;
+  error?: string;
 }

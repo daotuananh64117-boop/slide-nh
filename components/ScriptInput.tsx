@@ -26,7 +26,7 @@ const ScriptInput: React.FC<ScriptInputProps> = ({
     onGenerate(script);
   };
   
-  const exampleScript = `Một phi hành gia trẻ tên Alex chuẩn bị cho sứ mệnh có người lái đầu tiên lên sao Hỏa. Tiếng đếm ngược vang vọng trong buồng lái. Tên lửa phóng lên, đẩy Alex vào ghế khi Trái Đất thu nhỏ bên dưới. Sau nhiều tháng di chuyển, hành tinh đỏ hiện ra lớn dần qua cửa sổ. Alex thực hiện bước đi lịch sử đầu tiên lên bề mặt sao Hỏa, cắm một lá cờ bên cạnh tàu đổ bộ. Nhìn lại chấm xanh nhỏ bé trên bầu trời, một cảm giác kỳ diệu và cô đơn bao trùm lấy họ.`;
+  const exampleScript = `Lúc khởi đầu, Thiên Chúa tạo dựng trời và đất. Chúa phán, "Phải có ánh sáng," và có ánh sáng. Ngài thấy ánh sáng là tốt đẹp và Ngài phân chia ánh sáng khỏi bóng tối. Chúa tạo ra các lục địa và biển cả. Ngài làm cho cây cối và thực vật mọc lên trên mặt đất. Sau đó, Ngài tạo ra mặt trời, mặt trăng và các vì sao. Cuối cùng, Ngài tạo ra con người theo hình ảnh của Ngài và ban cho họ quyền cai quản mọi loài trên Trái Đất.`;
 
   // Derived state from duration prop
   const minutes = Math.floor(duration / 60);
