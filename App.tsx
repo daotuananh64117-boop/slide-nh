@@ -1,266 +1,249 @@
 import React, { useState } from 'react';
-import { generateScenesFromScript, generateImageFromPrompt } from './services/geminiService';
-import { Slide as SlideType, Scene, AspectRatio } from './types';
 import ScriptInput from './components/ScriptInput';
 import Slideshow from './components/Slideshow';
 import { FilmIcon, DownloadIcon } from './components/Icons';
+import { AspectRatio, Slide, Scene } from './types';
+import { generateScenesFromScript, generateImageForScene } from './services/geminiService';
 
-const App: React.FC = () => {
-  const [slides, setSlides] = useState<SlideType[]>([]);
-  const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [loadingMessage, setLoadingMessage] = useState<string>('');
+function App() {
+  const [slides, setSlides] = useState<Slide[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [slideDuration, setSlideDuration] = useState<number>(5);
-  const [isDownloading, setIsDownloading] = useState<boolean>(false);
+  const [duration, setDuration] = useState(60); // Default to 60 seconds (1 minute)
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>('16:9');
+  const [isDownloading, setIsDownloading] = useState(false);
 
   const handleGenerate = async (script: string) => {
     if (!script.trim()) {
-      setError('Kịch bản không được để trống.');
+      setError("Vui lòng nhập một kịch bản.");
       return;
     }
-
+    
     setIsLoading(true);
     setError(null);
     setSlides([]);
-    setLoadingMessage('Đang phân tích kịch bản của bạn để tạo cảnh...');
 
     try {
+      // 1. Generate scenes from the script
       const scenes: Scene[] = await generateScenesFromScript(script);
-
-      if (!scenes || scenes.length === 0) {
-        throw new Error('Không thể tạo cảnh từ kịch bản được cung cấp.');
-      }
       
-      const generatedSlides: SlideType[] = [];
+      if (!scenes || scenes.length === 0) {
+        throw new Error("Không thể tạo cảnh nào từ kịch bản được cung cấp.");
+      }
+
+      // 2. Create placeholder slides
+      const placeholderSlides = scenes.map(scene => ({
+        imageUrl: '',
+        caption: scene.caption
+      }));
+      setSlides(placeholderSlides);
+
+      // 3. Generate image for each scene one by one and update the slide
       for (let i = 0; i < scenes.length; i++) {
         const scene = scenes[i];
-        setLoadingMessage(`Đang tạo ảnh ${i + 1} trên ${scenes.length}: "${scene.image_prompt.substring(0, 50)}..."`);
-        
-        const imageBase64 = await generateImageFromPrompt(scene.image_prompt, aspectRatio);
-        const imageUrl = `data:image/jpeg;base64,${imageBase64}`;
-        
-        const newSlide: SlideType = {
-          imageUrl: imageUrl,
-          caption: scene.caption,
-        };
-
-        generatedSlides.push(newSlide);
-        setSlides([...generatedSlides]); 
+        try {
+            const imageUrl = await generateImageForScene(scene.image_prompt, aspectRatio);
+            setSlides(prevSlides => {
+              const newSlides = [...prevSlides];
+              newSlides[i] = { ...newSlides[i], imageUrl };
+              return newSlides;
+            });
+        } catch (imageError) {
+            console.error(`Failed to generate image for scene ${i}:`, imageError);
+            // We can decide to show a broken image or skip this slide.
+            // For now, we'll just leave it without an image.
+        }
       }
-
-    } catch (err) {
-      console.error(err);
-      setError(err instanceof Error ? err.message : 'Đã xảy ra lỗi không xác định.');
+    } catch (err: any) {
+      setError(err.message || 'Đã xảy ra lỗi không mong muốn.');
     } finally {
       setIsLoading(false);
-      setLoadingMessage('');
     }
-  };
-  
-  const drawSlideOnCanvas = (slide: SlideType, ctx: CanvasRenderingContext2D, width: number, height: number): Promise<void> => {
-    return new Promise((resolve, reject) => {
-        const img = new Image();
-        img.crossOrigin = 'anonymous';
-        img.onload = () => {
-            ctx.fillStyle = 'black';
-            ctx.fillRect(0, 0, width, height);
-
-            const imgAspectRatio = img.width / img.height;
-            const canvasAspectRatio = width / height;
-            let drawWidth = width;
-            let drawHeight = height;
-            let x = 0;
-            let y = 0;
-
-            if (imgAspectRatio > canvasAspectRatio) {
-                drawHeight = width / imgAspectRatio;
-                y = (height - drawHeight) / 2;
-            } else {
-                drawWidth = height * imgAspectRatio;
-                x = (width - drawWidth) / 2;
-            }
-            ctx.drawImage(img, x, y, drawWidth, drawHeight);
-
-            const gradientHeight = Math.min(height * 0.4, 200);
-            const gradient = ctx.createLinearGradient(0, height, 0, height - gradientHeight);
-            gradient.addColorStop(0, 'rgba(0,0,0,0.8)');
-            gradient.addColorStop(1, 'rgba(0,0,0,0)');
-            ctx.fillStyle = gradient;
-            ctx.fillRect(0, height - gradientHeight, width, gradientHeight);
-            
-            ctx.fillStyle = 'white';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'bottom';
-            const fontSize = Math.max(20, Math.min(width * 0.03, 36));
-            ctx.font = `${fontSize}px "Segoe UI", sans-serif`;
-            
-            const text = slide.caption;
-            const maxWidth = width * 0.9;
-            const lines: string[] = [];
-            let currentLine = '';
-            const words = text.split(' ');
-            
-            for (const word of words) {
-                const testLine = currentLine + word + ' ';
-                const metrics = ctx.measureText(testLine);
-                if (metrics.width > maxWidth && currentLine !== '') {
-                    lines.push(currentLine);
-                    currentLine = word + ' ';
-                } else {
-                    currentLine = testLine;
-                }
-            }
-            lines.push(currentLine);
-            
-            const lineHeight = fontSize * 1.2;
-            const startY = height - (fontSize * 0.8);
-            for (let i = lines.length - 1; i >= 0; i--) {
-                ctx.fillText(lines[i].trim(), width / 2, startY - (lines.length - 1 - i) * lineHeight);
-            }
-            resolve();
-        };
-        img.onerror = (err) => reject(err);
-        img.src = slide.imageUrl;
-    });
   };
 
   const handleDownload = async () => {
-    if (slides.length === 0 || isDownloading) return;
+    if (slides.length === 0 || slides.some(s => !s.imageUrl)) {
+      setError("Vui lòng đợi tất cả hình ảnh được tạo xong trước khi tải về.");
+      return;
+    }
     setIsDownloading(true);
     setError(null);
-    
-    const [width, height] = aspectRatio === '16:9' ? [1280, 720] : [720, 1280];
-
-    const canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
-    const ctx = canvas.getContext('2d');
-
-    if (!ctx) {
-        setError("Không thể tạo canvas để xuất video.");
-        setIsDownloading(false);
-        return;
-    }
-
+  
     try {
-        const stream = canvas.captureStream(30);
-        const recorder = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp9' });
-        const chunks: Blob[] = [];
-
-        recorder.ondataavailable = (e) => chunks.push(e.data);
-        recorder.onstop = () => {
-            const blob = new Blob(chunks, { type: 'video/webm' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = 'trinh-chieu-truyen.webm';
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
-            setIsDownloading(false);
-        };
-        
-        recorder.start();
-
-        for(const slide of slides) {
-            await drawSlideOnCanvas(slide, ctx, width, height);
-            // Hold the frame for the specified duration
-            await new Promise(resolve => setTimeout(resolve, slideDuration * 1000));
+      const canvas = document.createElement('canvas');
+      const aspectRatioParts = aspectRatio.split(':').map(Number);
+      const canvasWidth = 1280; // Standard HD width
+      const canvasHeight = Math.round((canvasWidth * aspectRatioParts[1]) / aspectRatioParts[0]);
+      canvas.width = canvasWidth;
+      canvas.height = canvasHeight;
+      const ctx = canvas.getContext('2d');
+  
+      if (!ctx) {
+        throw new Error("Không thể tạo video. Canvas context không được hỗ trợ.");
+      }
+  
+      const stream = canvas.captureStream(30); // 30 FPS
+      
+      const options = { mimeType: 'video/mp4; codecs=avc1' };
+      if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+          console.warn('video/mp4; codecs=avc1 not supported, falling back to webm.');
+          options.mimeType = 'video/webm; codecs=vp9';
+      }
+  
+      const recorder = new MediaRecorder(stream, options);
+      const chunks: Blob[] = [];
+  
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) {
+          chunks.push(e.data);
         }
-
-        recorder.stop();
+      };
+  
+      recorder.onstop = () => {
+        const blob = new Blob(chunks, { type: 'video/mp4' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'trinh-chieu.mp4';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        setIsDownloading(false);
+      };
+  
+      recorder.start();
+  
+      for (const slide of slides) {
+        const image = new Image();
+        image.crossOrigin = "anonymous";
+        const imageLoaded = new Promise((resolve, reject) => {
+          image.onload = resolve;
+          image.onerror = reject;
+        });
+        image.src = slide.imageUrl;
+        await imageLoaded;
+  
+        // Draw image
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+  
+        // Draw caption overlay (gradient)
+        const gradientHeight = Math.min(canvas.height * 0.4, 150);
+        const gradient = ctx.createLinearGradient(0, canvas.height, 0, canvas.height - gradientHeight);
+        gradient.addColorStop(0, 'rgba(0, 0, 0, 0.8)');
+        gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, canvas.height - gradientHeight, canvas.width, gradientHeight);
+  
+        // Draw caption text
+        ctx.fillStyle = 'white';
+        ctx.textAlign = 'center';
+        const fontSize = Math.max(16, canvas.width / 45);
+        ctx.font = `500 ${fontSize}px sans-serif`;
         
-    } catch (err) {
-      console.error("Video generation failed:", err);
-      setError("Không thể xuất video. Vui lòng thử lại.");
+        const words = slide.caption.split(' ');
+        let line = '';
+        const lines = [];
+        const maxWidth = canvas.width * 0.9;
+        for (let n = 0; n < words.length; n++) {
+          const testLine = line + words[n] + ' ';
+          const metrics = ctx.measureText(testLine);
+          if (metrics.width > maxWidth && n > 0) {
+            lines.push(line);
+            line = words[n] + ' ';
+          } else {
+            line = testLine;
+          }
+        }
+        lines.push(line);
+  
+        const lineHeight = fontSize * 1.3;
+        const startY = canvas.height - (lines.length * lineHeight) - (fontSize * 0.8);
+  
+        for (let i = 0; i < lines.length; i++) {
+          ctx.fillText(lines[i].trim(), canvas.width / 2, startY + (i * lineHeight));
+        }
+  
+        await new Promise(resolve => setTimeout(resolve, duration * 1000));
+      }
+  
+      recorder.stop();
+  
+    } catch (err: any) {
+      setError(err.message || "Đã xảy ra lỗi khi tạo video.");
       setIsDownloading(false);
     }
   };
 
   return (
-    <div className="min-h-screen bg-slate-900 text-gray-200 font-sans flex flex-col">
-      <header className="w-full p-4 border-b border-slate-700 bg-slate-900/80 backdrop-blur-sm sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto flex items-center gap-3">
-          <FilmIcon className="w-8 h-8 text-indigo-400" />
-          <h1 className="text-2xl font-bold tracking-tight text-white">
-            Trình tạo slide truyện
-          </h1>
-        </div>
-      </header>
-      <main className="flex-grow w-full max-w-7xl mx-auto p-4 md:p-8">
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          <div className="flex flex-col gap-6">
-            <h2 className="text-xl font-semibold text-indigo-300">1. Viết kịch bản của bạn</h2>
-            <p className="text-gray-400">
-             Nhập câu chuyện, kịch bản hoặc chuỗi sự kiện của bạn vào bên dưới. AI sẽ chia nhỏ thành các cảnh riêng biệt, tạo phụ đề mô tả và tạo một hình ảnh độc đáo cho mỗi phần.
-            </p>
+    <div className="bg-slate-900 text-white min-h-screen">
+      <div className="container mx-auto px-4 py-8 md:py-12">
+        <header className="text-center mb-8">
+          <div className="flex items-center justify-center gap-3">
+            <FilmIcon className="w-8 h-8 md:w-10 md:h-10 text-indigo-400" />
+            <h1 className="text-3xl md:text-4xl font-bold tracking-tight bg-gradient-to-r from-indigo-400 to-cyan-400 text-transparent bg-clip-text">
+              Trình tạo trình chiếu AI
+            </h1>
+          </div>
+          <p className="mt-3 text-lg text-slate-400">
+            Biến kịch bản của bạn thành một trình chiếu trực quan tuyệt đẹp.
+          </p>
+        </header>
+
+        <main className="max-w-2xl mx-auto">
+          <div className="bg-slate-800/50 p-6 rounded-lg shadow-lg border border-slate-700">
             <ScriptInput 
               onGenerate={handleGenerate} 
-              isLoading={isLoading} 
-              duration={slideDuration} 
-              onDurationChange={setSlideDuration}
+              isLoading={isLoading}
+              duration={duration}
+              onDurationChange={setDuration}
               aspectRatio={aspectRatio}
               onAspectRatioChange={setAspectRatio}
-             />
+            />
           </div>
-          <div className="flex flex-col gap-6">
-             <h2 className="text-xl font-semibold text-indigo-300">2. Xem trình chiếu của bạn</h2>
-            <div className="bg-slate-800 rounded-lg p-4 min-h-[400px] flex flex-col items-center justify-center border border-slate-700">
-              {error && <div className="text-red-400 p-4 bg-red-900/20 rounded-md mb-4 self-stretch">{error}</div>}
-              
-              {isLoading && (
-                <div className="flex flex-col items-center gap-4 text-center">
-                   <div className="w-16 h-16 border-4 border-dashed rounded-full animate-spin border-indigo-400"></div>
-                  <p className="text-lg font-medium text-indigo-300">Đang tạo trình chiếu...</p>
-                  <p className="text-sm text-gray-400 max-w-sm">{loadingMessage}</p>
-                </div>
-              )}
-              
-              {!isLoading && slides.length > 0 && (
-                <>
-                  <Slideshow slides={slides} duration={slideDuration} aspectRatio={aspectRatio} />
-                  <div className="mt-6">
-                      <button
-                          onClick={handleDownload}
-                          disabled={isDownloading}
-                          className="inline-flex items-center justify-center px-5 py-2.5 border border-slate-600 text-sm font-medium rounded-md text-gray-300 bg-slate-700 hover:bg-slate-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-slate-900 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-200"
-                      >
-                        {isDownloading ? (
-                            <>
-                                <svg className="animate-spin -ml-1 mr-3 h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                                </svg>
-                                Đang tạo video...
-                            </>
-                        ) : (
-                            <>
-                                <DownloadIcon className="w-5 h-5 mr-2" />
-                                Tải video (.webm)
-                            </>
-                        )}
-                      </button>
-                  </div>
-                </>
-              )}
-              
-              {!isLoading && !error && slides.length === 0 && (
-                <div className="text-center text-gray-500">
-                  <FilmIcon className="w-16 h-16 mx-auto mb-4" />
-                  <p>Trình chiếu của bạn sẽ xuất hiện ở đây.</p>
-                </div>
-              )}
+
+          {error && (
+            <div className="mt-6 bg-red-900/50 border border-red-700 text-red-300 px-4 py-3 rounded-md text-center">
+              {error}
             </div>
+          )}
+
+          <div className="mt-8">
+            <Slideshow slides={slides} duration={duration} aspectRatio={aspectRatio} />
+            {slides.length > 0 && !isLoading && (
+              <div className="mt-6 text-center">
+                <button
+                  onClick={handleDownload}
+                  disabled={isDownloading}
+                  className="inline-flex items-center justify-center px-6 py-3 border border-transparent text-base font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-slate-900 focus:ring-green-500 disabled:bg-green-500/50 disabled:cursor-not-allowed transition-colors duration-200"
+                >
+                  {isDownloading ? (
+                    <>
+                      <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                      </svg>
+                      Đang tạo video...
+                    </>
+                  ) : (
+                    <>
+                      <DownloadIcon className="w-5 h-5 mr-2" />
+                      Tải về video (.mp4)
+                    </>
+                  )}
+                </button>
+              </div>
+            )}
           </div>
-        </div>
-      </main>
-      <footer className="w-full text-center p-4 text-xs text-slate-500 border-t border-slate-800">
-        Hỗ trợ bởi Gemini API
-      </footer>
+        </main>
+        
+        <footer className="text-center mt-12 text-slate-500 text-sm">
+          <p>Được cung cấp bởi API Google Gemini. Giao diện được lấy cảm hứng từ các công cụ tạo video AI khác nhau.</p>
+        </footer>
+      </div>
     </div>
   );
-};
+}
 
 export default App;

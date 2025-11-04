@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { SparklesIcon, LandscapeIcon, PortraitIcon } from './Icons';
 import { AspectRatio } from '../types';
 
@@ -19,7 +19,7 @@ const ScriptInput: React.FC<ScriptInputProps> = ({
   aspectRatio,
   onAspectRatioChange,
 }) => {
-  const [script, setScript] = useState('');
+  const [script, setScript] = React.useState('');
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -27,6 +27,46 @@ const ScriptInput: React.FC<ScriptInputProps> = ({
   };
   
   const exampleScript = `Một phi hành gia trẻ tên Alex chuẩn bị cho sứ mệnh có người lái đầu tiên lên sao Hỏa. Tiếng đếm ngược vang vọng trong buồng lái. Tên lửa phóng lên, đẩy Alex vào ghế khi Trái Đất thu nhỏ bên dưới. Sau nhiều tháng di chuyển, hành tinh đỏ hiện ra lớn dần qua cửa sổ. Alex thực hiện bước đi lịch sử đầu tiên lên bề mặt sao Hỏa, cắm một lá cờ bên cạnh tàu đổ bộ. Nhìn lại chấm xanh nhỏ bé trên bầu trời, một cảm giác kỳ diệu và cô đơn bao trùm lấy họ.`;
+
+  // Derived state from duration prop
+  const minutes = Math.floor(duration / 60);
+  const seconds = duration % 60;
+
+  const handleMinutesChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    let newMinutes = parseInt(e.target.value, 10);
+    if (isNaN(newMinutes)) newMinutes = 0;
+
+    // Clamp and validate
+    if (newMinutes > 60) newMinutes = 60;
+    if (newMinutes < 0) newMinutes = 0;
+
+    let newSeconds = seconds;
+    // If user sets 60 mins, seconds must be 0.
+    if (newMinutes === 60) {
+        newSeconds = 0;
+    }
+
+    const totalSeconds = newMinutes * 60 + newSeconds;
+    onDurationChange(Math.max(1, totalSeconds));
+  };
+
+  const handleSecondsChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      let newSeconds = parseInt(e.target.value, 10);
+      if (isNaN(newSeconds)) newSeconds = 0;
+
+      // Clamp and validate
+      if (newSeconds > 59) newSeconds = 59;
+      if (newSeconds < 0) newSeconds = 0;
+      
+      // If minutes is already 60, don't allow seconds to be > 0.
+      if (minutes === 60) {
+        newSeconds = 0;
+      }
+      
+      const totalSeconds = minutes * 60 + newSeconds;
+      onDurationChange(Math.max(1, totalSeconds));
+  };
+
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-4">
@@ -55,18 +95,32 @@ const ScriptInput: React.FC<ScriptInputProps> = ({
                 </button>
             </div>
             <div className="flex items-center gap-2">
-              <label htmlFor="duration" className="text-sm text-gray-400">Thời lượng (giây):</label>
-              <input
-                type="number"
-                id="duration"
-                value={duration}
-                onChange={(e) => onDurationChange(Math.max(1, parseInt(e.target.value, 10) || 1))}
-                min="1"
-                max="60"
-                disabled={isLoading}
-                className="w-16 bg-slate-800 border border-slate-600 rounded-md p-1.5 text-center focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                aria-label="Thời lượng slide tính bằng giây"
-              />
+              <label htmlFor="duration_min" className="text-sm text-gray-400">Thời lượng:</label>
+              <div className="flex items-center bg-slate-800 border border-slate-600 rounded-md focus-within:ring-2 focus-within:ring-indigo-500">
+                <input
+                  type="number"
+                  id="duration_min"
+                  value={minutes}
+                  onChange={handleMinutesChange}
+                  min="0"
+                  max="60"
+                  disabled={isLoading}
+                  className="w-10 bg-transparent text-center p-1.5 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                  aria-label="Thời lượng slide tính bằng phút"
+                />
+                <span className="text-gray-500 -mx-1">:</span>
+                <input
+                  type="number"
+                  id="duration_sec"
+                  value={seconds}
+                  onChange={handleSecondsChange}
+                  min="0"
+                  max="59"
+                  disabled={isLoading}
+                  className="w-10 bg-transparent text-center p-1.5 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                  aria-label="Thời lượng slide tính bằng giây"
+                />
+              </div>
             </div>
         </div>
       </div>
