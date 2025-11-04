@@ -51,30 +51,25 @@ Trả lời ở định dạng JSON là một mảng các đối tượng, mỗi
 
 /**
  * Generates an image for a given scene prompt and aspect ratio.
+ * This function has been modified to use a free placeholder image service (Lorem Picsum)
+ * to meet the user's request for a faster, no-cost, no-API-key solution.
+ * The images will be random and will not match the generated prompt.
  */
 export async function generateImageForScene(prompt: string, aspectRatio: AspectRatio): Promise<string> {
-  // Use imagen-4.0-generate-001 for high-quality image generation.
-  const model = 'imagen-4.0-generate-001';
+  let width, height;
 
-  try {
-    const response = await ai.models.generateImages({
-      model: model,
-      prompt: prompt,
-      config: {
-        numberOfImages: 1,
-        aspectRatio: aspectRatio,
-        outputMimeType: 'image/jpeg'
-      }
-    });
-    
-    if (response.generatedImages && response.generatedImages.length > 0) {
-      const base64ImageBytes = response.generatedImages[0].image.imageBytes;
-      return `data:image/jpeg;base64,${base64ImageBytes}`;
-    } else {
-      throw new Error("No image was generated.");
-    }
-  } catch (error) {
-    console.error("Error generating image for scene:", error);
-    throw new Error("Không thể tạo hình ảnh cho cảnh.");
+  if (aspectRatio === '16:9') {
+    width = 1280;
+    height = 720;
+  } else { // 9:16
+    width = 720;
+    height = 1280;
   }
+
+  // Construct the URL for a random image from Lorem Picsum.
+  // The random parameter ensures a new image is fetched each time.
+  const imageUrl = `https://picsum.photos/${width}/${height}?random=${Math.random()}`;
+
+  // Wrap in a Promise to maintain the async function signature.
+  return Promise.resolve(imageUrl);
 }
