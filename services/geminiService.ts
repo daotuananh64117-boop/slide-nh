@@ -1,75 +1,53 @@
-import { GoogleGenAI, Type } from "@google/genai";
-import { Scene, AspectRatio } from '../types';
+import { GoogleGenAI, Type } from '@google/genai';
+import { Scene } from '../types';
 
-// The API key is sourced from `process.env.API_KEY` and is assumed to be available.
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-/**
- * Generates a list of scenes with image prompts and captions from a script.
- */
-export async function generateScenesFromScript(script: string): Promise<Scene[]> {
-  // Use gemini-2.5-flash for efficient text processing and JSON generation.
-  const model = 'gemini-2.5-flash';
+const sceneSchema = {
+  type: Type.OBJECT,
+  properties: {
+    description: {
+      type: Type.STRING,
+      description: 'Mô tả chi tiết và ngắn gọn về cảnh này, thường là một câu từ kịch bản gốc.'
+    },
+  },
+  required: ['description']
+};
 
-  const prompt = `Phân tích kịch bản sau đây và chia nó thành một chuỗi các cảnh. Đối với mỗi cảnh, hãy tạo một lời nhắc hình ảnh chi tiết bằng tiếng Anh để tạo ra hình ảnh phù hợp nhất.
-  
-Kịch bản:
-"${script}"
-
-Trả lời ở định dạng JSON là một mảng các đối tượng, mỗi đối tượng chỉ có một khóa duy nhất là "image_prompt".`;
-  
+export const generateScenesFromScript = async (script: string): Promise<Scene[]> => {
   try {
     const response = await ai.models.generateContent({
-      model: model,
-      contents: prompt,
+      model: 'gemini-2.5-flash',
+      contents: `Phân tích kịch bản sau đây và chia nó thành một chuỗi các cảnh riêng biệt. Mỗi cảnh nên tương ứng với một câu hoặc một ý tưởng hoàn chỉnh. Trả về kết quả dưới dạng một mảng các đối tượng JSON. Kịch bản: "${script}"`,
       config: {
-        responseMimeType: "application/json",
+        responseMimeType: 'application/json',
         responseSchema: {
           type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              image_prompt: {
-                type: Type.STRING,
-                description: "A detailed, descriptive English prompt for an AI image generator to create a scene from the script."
-              }
-            },
-            required: ["image_prompt"]
-          }
-        }
-      }
+          items: sceneSchema
+        },
+      },
     });
-
+    
     const jsonText = response.text.trim();
     const scenes = JSON.parse(jsonText);
-    return scenes;
+
+    if (!Array.isArray(scenes) || scenes.length === 0) {
+      throw new Error("AI không thể tạo ra bất kỳ cảnh nào từ kịch bản được cung cấp.");
+    }
+    
+    // Validate that scenes have the correct structure
+    const validScenes = scenes.filter(scene => typeof scene.description === 'string');
+    if(validScenes.length === 0) {
+        throw new Error("Định dạng cảnh do AI trả về không hợp lệ.");
+    }
+
+    return validScenes;
+
   } catch (error) {
-    console.error("Error generating scenes from script:", error);
-    throw new Error("Không thể tạo cảnh từ kịch bản.");
+    console.error("Lỗi khi tạo cảnh bằng Gemini:", error);
+    if (error instanceof SyntaxError) {
+        throw new Error("Không thể phân tích phản hồi từ AI. Vui lòng thử lại.");
+    }
+    throw new Error("Đã xảy ra lỗi khi giao tiếp với AI để phân tích kịch bản.");
   }
-}
-
-/**
- * Generates an image for a given scene prompt and aspect ratio.
- * This function has been modified to use a free placeholder image service (Lorem Picsum)
- * to meet the user's request for a faster, no-cost, no-API-key solution.
- * The images will be random and will not match the generated prompt.
- */
-export async function generateImageForScene(prompt: string, aspectRatio: AspectRatio): Promise<string> {
-  let width, height;
-
-  if (aspectRatio === '16:9') {
-    width = 1280;
-    height = 720;
-  } else { // 9:16
-    width = 720;
-    height = 1280;
-  }
-
-  // Construct the URL for a random image from Lorem Picsum.
-  // The random parameter ensures a new image is fetched each time.
-  const imageUrl = `https://picsum.photos/${width}/${height}?random=${Math.random()}`;
-
-  // Wrap in a Promise to maintain the async function signature.
-  return Promise.resolve(imageUrl);
-}
+};

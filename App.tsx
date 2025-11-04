@@ -2,8 +2,8 @@ import React, { useState } from 'react';
 import ScriptInput from './components/ScriptInput';
 import Slideshow from './components/Slideshow';
 import { FilmIcon, DownloadIcon } from './components/Icons';
-import { AspectRatio, Slide, Scene } from './types';
-import { generateScenesFromScript, generateImageForScene } from './services/geminiService';
+import { AspectRatio, Slide, TransitionEffect, Scene } from './types';
+import { generateScenesFromScript } from './services/geminiService';
 
 const App: React.FC = () => {
   const [slides, setSlides] = useState<Slide[]>([]);
@@ -24,36 +24,36 @@ const App: React.FC = () => {
     setSlides([]);
 
     try {
-      // 1. Generate scenes from the script
+      // 1. Call Gemini AI to analyze the script and create scenes
       const scenes: Scene[] = await generateScenesFromScript(script);
-      
-      if (!scenes || scenes.length === 0) {
-        throw new Error("Không thể tạo cảnh nào từ kịch bản được cung cấp.");
+
+      if (scenes.length === 0) {
+        throw new Error("Không thể tạo cảnh nào. Vui lòng thử một kịch bản khác.");
       }
+      
+      const transitions: TransitionEffect[] = ['fade', 'slide-left', 'zoom-in'];
 
-      // 2. Create placeholder slides
-      const placeholderSlides = scenes.map(() => ({
-        imageUrl: '',
+      const generateImageUrl = (aspectRatio: AspectRatio): string => {
+        let width, height;
+        if (aspectRatio === '16:9') {
+          width = 1280;
+          height = 720;
+        } else { // 9:16
+          width = 720;
+          height = 1280;
+        }
+        // Use Lorem Picsum for fast, free placeholder images
+        return `https://picsum.photos/${width}/${height}?random=${Math.random()}`;
+      };
+
+      // 2. Create slides from scenes.
+      const newSlides: Slide[] = scenes.map((scene, index) => ({
+        imageUrl: generateImageUrl(aspectRatio),
+        text: scene.description,
+        transition: transitions[index % transitions.length],
       }));
-      setSlides(placeholderSlides);
-
-      // 3. Generate images for all scenes in parallel
-      const imageGenerationPromises = scenes.map((scene, index) =>
-        generateImageForScene(scene.image_prompt, aspectRatio)
-          .then(imageUrl => {
-            setSlides(prevSlides => {
-              const newSlides = [...prevSlides];
-              newSlides[index] = { imageUrl };
-              return newSlides;
-            });
-          })
-          .catch(imageError => {
-            console.error(`Failed to generate image for scene ${index}:`, imageError);
-            // The slide for this index will remain a placeholder, showing the loading spinner.
-          })
-      );
-
-      await Promise.allSettled(imageGenerationPromises);
+      
+      setSlides(newSlides);
 
     } catch (err: any) {
       setError(err.message || 'Đã xảy ra lỗi không mong muốn.');
@@ -69,6 +69,17 @@ const App: React.FC = () => {
     }
     setIsDownloading(true);
     setError(null);
+
+    const TRANSITION_DURATION = 1.0; // in seconds
+    const slideDuration = slides.length > 0 
+      ? (totalDuration - (slides.length - 1) * TRANSITION_DURATION) / slides.length
+      : 0;
+
+    if (slideDuration <= 0) {
+      setError(`Tổng thời lượng quá ngắn cho ${slides.length} slide và các hiệu ứng chuyển cảnh. Vui lòng tăng thời lượng.`);
+      setIsDownloading(false);
+      return;
+    }
   
     try {
       const canvas = document.createElement('canvas');
@@ -82,25 +93,68 @@ const App: React.FC = () => {
       if (!ctx) {
         throw new Error("Không thể tạo video. Canvas context không được hỗ trợ.");
       }
-  
-      const stream = canvas.captureStream(30); // 30 FPS
-      
+
+      const loadImage = async (src: string): Promise<HTMLImageElement> => {
+        try {
+          // Add a cache-busting parameter to ensure a fresh image
+          const url = new URL(src);
+          url.searchParams.set('cachebust', Date.now().toString());
+          
+          // Fetch the image as a blob
+          const response = await fetch(url.toString(), { cache: 'no-store' });
+          if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+          }
+          const blob = await response.blob();
+          
+          // Create an object URL from the blob
+          const objectUrl = URL.createObjectURL(blob);
+
+          // Load the image from the object URL
+          return new Promise((resolve, reject) => {
+            const img = new Image();
+            img.onload = () => {
+              URL.revokeObjectURL(objectUrl); // Clean up the object URL
+              resolve(img);
+            };
+            img.onerror = () => {
+              URL.revokeObjectURL(objectUrl); // Clean up on error too
+              reject(new Error(`Không thể giải mã hình ảnh từ ${src}.`));
+            };
+            img.src = objectUrl;
+          });
+        } catch (error) {
+          console.error(`Lỗi khi tải hình ảnh từ ${src}:`, error);
+          throw new Error(`Không thể tải hình ảnh từ ${src}. Vui lòng kiểm tra kết nối mạng của bạn và thử lại.`);
+        }
+      };
+
+      const drawImageFit = (ctx: CanvasRenderingContext2D, img: HTMLImageElement, scale = 1, offsetX = 0, offsetY = 0) => {
+          const canvas = ctx.canvas;
+          const hRatio = canvas.width / img.width;
+          const vRatio = canvas.height / img.height;
+          const ratio = Math.max(hRatio, vRatio) * scale;
+          const centerShiftX = (canvas.width - img.width * ratio) / 2;
+          const centerShiftY = (canvas.height - img.height * ratio) / 2;
+          ctx.drawImage(img, 0, 0, img.width, img.height,
+                        centerShiftX + offsetX, centerShiftY + offsetY, img.width * ratio, img.height * ratio);
+      };
+        
       let fileExtension = 'mp4';
       let mimeType = 'video/mp4; codecs=avc1.42E01E';
       if (!MediaRecorder.isTypeSupported(mimeType)) {
-          console.warn(`${mimeType} not supported, falling back to vp9.`);
           mimeType = 'video/webm; codecs=vp9';
+          fileExtension = 'webm';
           if (!MediaRecorder.isTypeSupported(mimeType)) {
-            console.warn(`${mimeType} not supported, falling back to vp8.`);
             mimeType = 'video/webm; codecs=vp8';
             if (!MediaRecorder.isTypeSupported(mimeType)) {
               throw new Error("Không có loại MIME video nào được hỗ trợ (mp4/webm vp9/webm vp8) để ghi.");
             }
           }
-          fileExtension = 'webm';
       }
-  
-      const recorder = new MediaRecorder(stream, { mimeType });
+
+      const stream = canvas.captureStream();
+      const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 3000000 });
       const chunks: Blob[] = [];
   
       recorder.ondataavailable = (e) => {
@@ -109,58 +163,107 @@ const App: React.FC = () => {
         }
       };
   
-      recorder.onstop = () => {
-        const blob = new Blob(chunks, { type: mimeType.split(';')[0] });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `trinh-chieu.${fileExtension}`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-        setIsDownloading(false);
-      };
-  
-      recorder.start();
-      
-      // FIX: Removed shadowed slideDuration variable. The loop below will use the one from the component scope.
-  
-      for (const slide of slides) {
-        const image = new Image();
-        image.crossOrigin = "anonymous";
-        const imageLoaded = new Promise<void>((resolve, reject) => {
-          image.onload = () => resolve();
-          image.onerror = reject;
-        });
-        image.src = slide.imageUrl;
-        await imageLoaded;
-  
-        // Draw image while maintaining aspect ratio
-        ctx.fillStyle = '#000'; // Black background for letterboxing
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      await new Promise<void>(async (resolve, reject) => {
+        recorder.onstop = () => {
+          const blob = new Blob(chunks, { type: mimeType.split(';')[0] });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `trinh-chieu.${fileExtension}`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+          setIsDownloading(false);
+          resolve();
+        };
 
-        const hRatio = canvas.width / image.width;
-        const vRatio = canvas.height / image.height;
-        const ratio = Math.min(hRatio, vRatio);
-        const centerShiftX = (canvas.width - image.width * ratio) / 2;
-        const centerShiftY = (canvas.height - image.height * ratio) / 2;  
+        recorder.onerror = (event) => reject(new Error("Lỗi xảy ra trong quá trình ghi video."));
+        
+        try {
+            const images = await Promise.all(slides.map(slide => loadImage(slide.imageUrl)));
+            
+            const totalVideoDurationMs = totalDuration * 1000;
+            const slideDurationMs = slideDuration * 1000;
+            const transitionDurationMs = TRANSITION_DURATION * 1000;
+            const timePerSlideAndTransition = slideDurationMs + transitionDurationMs;
 
-        ctx.drawImage(image, 0, 0, image.width, image.height,
-                      centerShiftX, centerShiftY, image.width * ratio, image.height * ratio);
-  
-        await new Promise(resolve => setTimeout(resolve, slideDuration * 1000));
-      }
-  
-      recorder.stop();
+            const renderFrame = (elapsedTimeMs: number) => {
+                const slideIndex = Math.min(images.length - 1, Math.floor(elapsedTimeMs / timePerSlideAndTransition));
+                const timeIntoCurrentBlock = elapsedTimeMs - (slideIndex * timePerSlideAndTransition);
+                const currentImage = images[slideIndex];
+
+                ctx.fillStyle = '#000';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                if (slideIndex === images.length - 1 || timeIntoCurrentBlock <= slideDurationMs) {
+                    const progress = Math.min(1, timeIntoCurrentBlock / slideDurationMs);
+                    const scale = 1 + progress * 0.1; // Ken Burns effect
+                    drawImageFit(ctx, currentImage, scale);
+                } else {
+                    const nextImage = images[slideIndex + 1];
+                    const transition = slides[slideIndex + 1]?.transition;
+                    const progress = (timeIntoCurrentBlock - slideDurationMs) / transitionDurationMs;
+                    const previousImage = currentImage;
+
+                    switch (transition) {
+                        case 'fade':
+                            ctx.globalAlpha = 1 - progress;
+                            drawImageFit(ctx, previousImage, 1.1);
+                            ctx.globalAlpha = progress;
+                            drawImageFit(ctx, nextImage, 1);
+                            ctx.globalAlpha = 1;
+                            break;
+                        case 'slide-left':
+                            const moveX = canvas.width * progress;
+                            drawImageFit(ctx, previousImage, 1.1, -moveX);
+                            drawImageFit(ctx, nextImage, 1, canvas.width - moveX);
+                            break;
+                        case 'zoom-in':
+                            drawImageFit(ctx, previousImage, 1.1);
+                            ctx.globalAlpha = progress;
+                            drawImageFit(ctx, nextImage, 0.5 + progress * 0.5);
+                            ctx.globalAlpha = 1;
+                            break;
+                        default:
+                            drawImageFit(ctx, previousImage, 1.1);
+                            break;
+                    }
+                }
+            };
+            
+            recorder.start();
+            const startTime = performance.now();
+
+            const renderLoop = (currentTime: number) => {
+                const elapsedTimeMs = currentTime - startTime;
+
+                if (elapsedTimeMs >= totalVideoDurationMs) {
+                    if (recorder.state === 'recording') {
+                        recorder.stop();
+                    }
+                    return;
+                }
+                
+                renderFrame(elapsedTimeMs);
+                requestAnimationFrame(renderLoop);
+            };
+
+            requestAnimationFrame(renderLoop);
+
+        } catch(err) {
+            reject(err);
+        }
+      });
   
     } catch (err: any) {
-      setError(err.message || "Đã xảy ra lỗi khi tạo video.");
+      console.error("Lỗi khi tạo video:", err);
+      setError(err.message || "Đã xảy ra lỗi không mong muốn khi tạo video.");
       setIsDownloading(false);
     }
   };
 
-  const slideDuration = slides.length > 0 ? totalDuration / slides.length : 0;
+  const previewSlideDuration = slides.length > 0 ? totalDuration / slides.length : 0;
 
   return (
     <div className="bg-slate-900 text-white min-h-screen">
@@ -196,7 +299,7 @@ const App: React.FC = () => {
           )}
 
           <div className="mt-8">
-            <Slideshow slides={slides} duration={slideDuration} aspectRatio={aspectRatio} />
+            <Slideshow slides={slides} duration={previewSlideDuration} aspectRatio={aspectRatio} />
             {slides.length > 0 && !isLoading && (
               <div className="mt-6 text-center">
                 <button
@@ -225,7 +328,7 @@ const App: React.FC = () => {
         </main>
         
         <footer className="text-center mt-12 text-slate-500 text-sm">
-          <p>Được cung cấp bởi API Google Gemini. Giao diện được lấy cảm hứng từ các công cụ tạo video AI khác nhau.</p>
+          <p>Hình ảnh được cung cấp bởi Lorem Picsum. Giao diện được lấy cảm hứng từ các công cụ tạo video AI khác nhau.</p>
         </footer>
       </div>
     </div>

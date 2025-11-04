@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Slide, AspectRatio } from '../types';
+import { Slide, AspectRatio, TransitionEffect } from '../types';
 import { ChevronLeftIcon, ChevronRightIcon, PlayIcon, PauseIcon } from './Icons';
 
 interface SlideshowProps {
@@ -8,36 +8,94 @@ interface SlideshowProps {
   aspectRatio: AspectRatio;
 }
 
+const getTransitionClasses = (transition: TransitionEffect): { in: string, out: string } => {
+  switch (transition) {
+    case 'slide-left':
+      return { in: 'slide-left-in', out: 'slide-left-out' };
+    case 'zoom-in':
+      return { in: 'zoom-in-in', out: 'zoom-in-out' };
+    case 'fade':
+    default:
+      return { in: 'fade-in', out: 'fade-out' };
+  }
+}
+
 const Slideshow: React.FC<SlideshowProps> = ({ slides, duration, aspectRatio }) => {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
-  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // This state will hold at most two slides: the previous one animating out, and the current one animating in.
+  const [transitionState, setTransitionState] = useState<{ slide: Slide, classes: string }[]>([]);
+  const autoplayTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cleanupTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const resetTimeout = () => {
-    if (timeoutRef.current) {
-      clearTimeout(timeoutRef.current);
-    }
-  };
+  // Effect to initialize or reset the slideshow when the slides prop changes.
+  useEffect(() => {
+    if (autoplayTimeoutRef.current) clearTimeout(autoplayTimeoutRef.current);
+    if (cleanupTimeoutRef.current) clearTimeout(cleanupTimeoutRef.current);
 
-  useEffect(() => {
-    resetTimeout();
-    if (isPlaying && slides.length > 0) {
-      timeoutRef.current = setTimeout(
-        () => setCurrentIndex((prevIndex) => (prevIndex + 1) % slides.length),
-        duration * 1000
-      );
+    if (slides.length > 0 && slides[0].imageUrl) {
+      setTransitionState([{ slide: slides[0], classes: 'slide active' }]);
+    } else {
+      setTransitionState([]);
     }
-    return () => {
-      resetTimeout();
-    };
-  }, [currentIndex, isPlaying, duration, slides]);
-  
-  useEffect(() => {
-    // Reset to first slide when slides array changes
     setCurrentIndex(0);
     setIsPlaying(false);
   }, [slides]);
+  
+  const runTransition = (newIndex: number) => {
+    const oldIndex = currentIndex;
+    if (newIndex === oldIndex || slides.length < 2 || !slides[oldIndex]?.imageUrl || !slides[newIndex]?.imageUrl) return;
+    
+    if (cleanupTimeoutRef.current) clearTimeout(cleanupTimeoutRef.current);
 
+    const transitionEffect = slides[newIndex].transition;
+    const { in: inClass, out: outClass } = getTransitionClasses(transitionEffect);
+    
+    // Use a functional update to base the new state on the previous one reliably.
+    setTransitionState(currentState => {
+        const currentActive = currentState.find(s => s.classes.includes('active'));
+        if (!currentActive) return []; // Should not happen if initialized correctly.
+
+        const previous = { ...currentActive, classes: `slide previous ${outClass}` };
+        const next = { slide: slides[newIndex], classes: `slide active ${inClass}` };
+        
+        return [previous, next];
+    });
+
+    setCurrentIndex(newIndex);
+
+    cleanupTimeoutRef.current = setTimeout(() => {
+      // After the animation, clean up the state to only contain the new active slide.
+      setTransitionState(currentState => {
+        const active = currentState.find(s => s.classes.includes('active'));
+        // Strip the animation class so it doesn't re-run.
+        return active ? [{...active, classes: 'slide active'}] : [];
+      });
+    }, 1000); // Must match CSS animation duration
+  };
+
+  // Autoplay effect, separated from other logic.
+  useEffect(() => {
+    if (autoplayTimeoutRef.current) clearTimeout(autoplayTimeoutRef.current);
+    if (isPlaying && slides.length > 1 && duration > 0) {
+      autoplayTimeoutRef.current = setTimeout(() => {
+        const newIndex = (currentIndex + 1) % slides.length;
+        runTransition(newIndex);
+      }, duration * 1000);
+    }
+    return () => {
+      if (autoplayTimeoutRef.current) clearTimeout(autoplayTimeoutRef.current);
+    };
+  }, [currentIndex, isPlaying, duration, slides]);
+
+  // Cleanup all timeouts on component unmount.
+  useEffect(() => {
+    return () => {
+      if (autoplayTimeoutRef.current) clearTimeout(autoplayTimeoutRef.current);
+      if (cleanupTimeoutRef.current) clearTimeout(cleanupTimeoutRef.current);
+    }
+  }, []);
+  
   if (slides.length === 0) {
     return (
       <div className={`w-full bg-slate-800 border-2 border-dashed border-slate-600 rounded-lg flex items-center justify-center text-slate-500 ${aspectRatio === '16:9' ? 'aspect-video' : 'aspect-[9/16]'}`}>
@@ -47,40 +105,31 @@ const Slideshow: React.FC<SlideshowProps> = ({ slides, duration, aspectRatio }) 
   }
 
   const goToPrevious = () => {
-    const isFirstSlide = currentIndex === 0;
-    const newIndex = isFirstSlide ? slides.length - 1 : currentIndex - 1;
-    setCurrentIndex(newIndex);
+    const newIndex = currentIndex === 0 ? slides.length - 1 : currentIndex - 1;
+    runTransition(newIndex);
+    setIsPlaying(false);
   };
 
   const goToNext = () => {
-    const isLastSlide = currentIndex === slides.length - 1;
-    const newIndex = isLastSlide ? 0 : currentIndex + 1;
-    setCurrentIndex(newIndex);
+    const newIndex = (currentIndex + 1) % slides.length;
+    runTransition(newIndex);
+    setIsPlaying(false);
   };
 
   const togglePlay = () => {
     setIsPlaying(!isPlaying);
   };
-
-  const currentSlide = slides[currentIndex];
-  const hasImage = currentSlide && currentSlide.imageUrl;
-
+  
   return (
     <div className="relative group">
       <div className={`w-full overflow-hidden bg-slate-800 rounded-lg shadow-lg relative ${aspectRatio === '16:9' ? 'aspect-video' : 'aspect-[9/16]'}`}>
-        {hasImage ? (
-          <img src={currentSlide.imageUrl} alt={`Slide ${currentIndex + 1}`} className="w-full h-full object-cover transition-opacity duration-500" />
-        ) : (
-          <div className="w-full h-full flex items-center justify-center bg-slate-800">
-            <div className="flex flex-col items-center gap-2 text-slate-500">
-                <svg className="animate-spin h-8 w-8 text-slate-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
-                <span>Đang tạo ảnh...</span>
-            </div>
-          </div>
-        )}
+        {transitionState.map(({ slide, classes }) => (
+          <div
+            key={slide.imageUrl} // Use stable image URL as key
+            className={classes}
+            style={{ backgroundImage: `url(${slide.imageUrl})` }}
+          />
+        ))}
       </div>
 
       {/* Controls */}
