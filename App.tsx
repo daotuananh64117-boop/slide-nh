@@ -95,38 +95,47 @@ const App: React.FC = () => {
       }
 
       const loadImage = async (src: string): Promise<HTMLImageElement> => {
-        try {
-          // Add a cache-busting parameter to ensure a fresh image
-          const url = new URL(src);
-          url.searchParams.set('cachebust', Date.now().toString());
-          
-          // Fetch the image as a blob
-          const response = await fetch(url.toString(), { cache: 'no-store' });
-          if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-          }
-          const blob = await response.blob();
-          
-          // Create an object URL from the blob
-          const objectUrl = URL.createObjectURL(blob);
+        const MAX_RETRIES = 3;
+        const RETRY_DELAY = 1000; // 1 second
 
-          // Load the image from the object URL
-          return new Promise((resolve, reject) => {
-            const img = new Image();
-            img.onload = () => {
-              URL.revokeObjectURL(objectUrl); // Clean up the object URL
-              resolve(img);
-            };
-            img.onerror = () => {
-              URL.revokeObjectURL(objectUrl); // Clean up on error too
-              reject(new Error(`Không thể giải mã hình ảnh từ ${src}.`));
-            };
-            img.src = objectUrl;
-          });
-        } catch (error) {
-          console.error(`Lỗi khi tải hình ảnh từ ${src}:`, error);
-          throw new Error(`Không thể tải hình ảnh từ ${src}. Vui lòng kiểm tra kết nối mạng của bạn và thử lại.`);
+        for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+            try {
+                const url = new URL(src);
+                // Use a unique cache-busting param for each attempt
+                url.searchParams.set('cachebust', `${Date.now()}-${attempt}`);
+                
+                const response = await fetch(url.toString(), { cache: 'no-store' });
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const blob = await response.blob();
+                
+                const objectUrl = URL.createObjectURL(blob);
+
+                return new Promise((resolve, reject) => {
+                    const img = new Image();
+                    img.onload = () => {
+                        URL.revokeObjectURL(objectUrl);
+                        resolve(img);
+                    };
+                    img.onerror = () => {
+                        URL.revokeObjectURL(objectUrl);
+                        reject(new Error(`Không thể giải mã hình ảnh từ ${src}.`));
+                    };
+                    img.src = objectUrl;
+                });
+            } catch (error) {
+                console.warn(`Lần thử ${attempt} thất bại cho ${src}:`, error);
+                if (attempt === MAX_RETRIES) {
+                    console.error(`Không thể tải hình ảnh từ ${src} sau ${MAX_RETRIES} lần thử:`, error);
+                    throw new Error(`Không thể tải hình ảnh từ ${src}. Vui lòng kiểm tra kết nối mạng của bạn và thử lại.`);
+                }
+                // Wait before the next retry, with increasing delay
+                await new Promise(res => setTimeout(res, RETRY_DELAY * attempt));
+            }
         }
+        // This line should theoretically be unreachable if MAX_RETRIES > 0
+        throw new Error(`Tải hình ảnh ${src} thất bại không mong muốn.`);
       };
 
       const drawImageFit = (ctx: CanvasRenderingContext2D, img: HTMLImageElement, scale = 1, offsetX = 0, offsetY = 0) => {
