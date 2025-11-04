@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import ScriptInput from './components/ScriptInput';
 import Slideshow from './components/Slideshow';
@@ -47,10 +48,10 @@ const App: React.FC = () => {
       };
 
       // 2. Create slides from scenes.
-      const newSlides: Slide[] = scenes.map((scene, index) => ({
+      const newSlides: Slide[] = scenes.map((scene) => ({
         imageUrl: generateImageUrl(aspectRatio),
         text: scene.description,
-        transition: transitions[index % transitions.length],
+        transition: transitions[Math.floor(Math.random() * transitions.length)],
       }));
       
       setSlides(newSlides);
@@ -242,23 +243,26 @@ const App: React.FC = () => {
             };
             
             recorder.start();
-            const startTime = performance.now();
+            
+            let virtualTimeMs = 0;
+            const FRAME_DURATION_MS = 1000 / 60; // Render at 60fps
 
-            const renderLoop = (currentTime: number) => {
-                const elapsedTimeMs = currentTime - startTime;
-
-                if (elapsedTimeMs >= totalVideoDurationMs) {
+            const renderLoop = () => {
+                if (virtualTimeMs >= totalVideoDurationMs) {
                     if (recorder.state === 'recording') {
                         recorder.stop();
                     }
                     return;
                 }
                 
-                renderFrame(elapsedTimeMs);
-                requestAnimationFrame(renderLoop);
+                renderFrame(virtualTimeMs);
+                virtualTimeMs += FRAME_DURATION_MS;
+
+                // Use setTimeout to yield but process faster than real-time.
+                setTimeout(renderLoop, 0); 
             };
 
-            requestAnimationFrame(renderLoop);
+            setTimeout(renderLoop, 0);
 
         } catch(err) {
             reject(err);
