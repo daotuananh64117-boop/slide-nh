@@ -1,133 +1,107 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Slide, AspectRatio } from '../types';
 import { ChevronLeftIcon, ChevronRightIcon, PlayIcon, PauseIcon } from './Icons';
 
 interface SlideshowProps {
   slides: Slide[];
-  duration: number; // in seconds
+  duration: number; // Duration per slide in seconds for autoplay
   aspectRatio: AspectRatio;
 }
 
 const Slideshow: React.FC<SlideshowProps> = ({ slides, duration, aspectRatio }) => {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const timerRef = useRef<number | null>(null);
-  const progressRef = useRef<number | null>(null);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const resetTimers = useCallback(() => {
-    if (timerRef.current) clearInterval(timerRef.current);
-    if (progressRef.current) clearInterval(progressRef.current);
-    setProgress(0);
-  }, []);
+  const resetTimeout = () => {
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+    }
+  };
+
+  useEffect(() => {
+    resetTimeout();
+    if (isPlaying && slides.length > 0) {
+      timeoutRef.current = setTimeout(
+        () => setCurrentIndex((prevIndex) => (prevIndex + 1) % slides.length),
+        duration * 1000
+      );
+    }
+    return () => {
+      resetTimeout();
+    };
+  }, [currentIndex, isPlaying, duration, slides]);
   
-  const goToNext = useCallback(() => {
-    setCurrentIndex((prevIndex) => (prevIndex === slides.length - 1 ? 0 : prevIndex + 1));
-  }, [slides.length]);
-
   useEffect(() => {
-    if (isPlaying) {
-      resetTimers();
-      timerRef.current = window.setInterval(goToNext, duration * 1000);
-      const startTime = Date.now();
-      progressRef.current = window.setInterval(() => {
-        const elapsedTime = Date.now() - startTime;
-        const newProgress = Math.min(100, (elapsedTime / (duration * 1000)) * 100);
-        setProgress(newProgress);
-      }, 100);
-    } else {
-      resetTimers();
-    }
-    return () => resetTimers();
-  }, [isPlaying, currentIndex, duration, goToNext, resetTimers]);
+    // Reset to first slide when slides array changes
+    setCurrentIndex(0);
+    setIsPlaying(false);
+  }, [slides]);
 
-  useEffect(() => {
-    if (slides.length > 0) {
-      // Go to the latest generated slide but don't autoplay
-      const newIndex = slides.length - 1;
-      if (newIndex !== currentIndex) {
-        setCurrentIndex(newIndex);
-        setIsPlaying(false);
-      }
-    }
-  }, [slides.length]);
+  if (slides.length === 0) {
+    return (
+      <div className={`w-full bg-slate-800 border-2 border-dashed border-slate-600 rounded-lg flex items-center justify-center text-slate-500 ${aspectRatio === '16:9' ? 'aspect-video' : 'aspect-[9/16]'}`}>
+        Các hình ảnh được tạo của bạn sẽ xuất hiện ở đây.
+      </div>
+    );
+  }
 
   const goToPrevious = () => {
-    setIsPlaying(false);
     const isFirstSlide = currentIndex === 0;
     const newIndex = isFirstSlide ? slides.length - 1 : currentIndex - 1;
     setCurrentIndex(newIndex);
   };
 
-  const handleGoToNext = () => {
-    setIsPlaying(false);
-    goToNext();
+  const goToNext = () => {
+    const isLastSlide = currentIndex === slides.length - 1;
+    const newIndex = isLastSlide ? 0 : currentIndex + 1;
+    setCurrentIndex(newIndex);
   };
-  
+
   const togglePlay = () => {
-      setIsPlaying(!isPlaying);
+    setIsPlaying(!isPlaying);
   };
-  
-  if (!slides || slides.length === 0) {
-    return null;
-  }
 
   const currentSlide = slides[currentIndex];
-  
-  const containerClass = aspectRatio === '16:9'
-      ? 'w-full max-w-2xl mx-auto flex flex-col gap-4'
-      : 'w-full max-w-[280px] sm:max-w-xs mx-auto flex flex-col gap-4';
-
-  const slideshowClass = aspectRatio === '16:9'
-      ? 'relative aspect-video w-full bg-slate-900 rounded-lg overflow-hidden shadow-2xl shadow-slate-900/50'
-      : 'relative aspect-[9/16] w-full bg-slate-900 rounded-lg overflow-hidden shadow-2xl shadow-slate-900/50';
+  const hasImage = currentSlide && currentSlide.imageUrl;
 
   return (
-    <div className={containerClass}>
-      <div className={slideshowClass}>
-        {currentSlide.imageUrl ? (
-            <img src={currentSlide.imageUrl} alt={`Slide ${currentIndex + 1}`} className="w-full h-full object-cover" />
+    <div className="relative group">
+      <div className={`w-full overflow-hidden bg-slate-800 rounded-lg shadow-lg relative ${aspectRatio === '16:9' ? 'aspect-video' : 'aspect-[9/16]'}`}>
+        {hasImage ? (
+          <img src={currentSlide.imageUrl} alt={`Slide ${currentIndex + 1}`} className="w-full h-full object-cover transition-opacity duration-500" />
         ) : (
-            <div className="w-full h-full flex items-center justify-center">
-                 <div className="w-8 h-8 border-2 border-dashed rounded-full animate-spin border-slate-400"></div>
+          <div className="w-full h-full flex items-center justify-center bg-slate-800">
+            <div className="flex flex-col items-center gap-2 text-slate-500">
+                <svg className="animate-spin h-8 w-8 text-slate-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <span>Đang tạo ảnh...</span>
             </div>
+          </div>
         )}
-        
-        <div className="absolute inset-x-0 bottom-0 h-1 bg-white/20">
-          <div 
-            className="h-full bg-indigo-400" 
-            style={{ width: `${progress}%`, transition: isPlaying && progress > 1 ? 'width 0.1s linear' : 'none' }} 
-          />
-        </div>
-        
-        <div className="absolute inset-0 flex justify-between items-center p-2">
-            <button 
-                onClick={goToPrevious}
-                className="p-2 rounded-full bg-black/40 hover:bg-black/60 text-white transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-white"
-                aria-label="Slide trước"
-            >
-                <ChevronLeftIcon className="w-6 h-6" />
-            </button>
-            <button 
-                onClick={handleGoToNext}
-                className="p-2 rounded-full bg-black/40 hover:bg-black/60 text-white transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-white"
-                aria-label="Slide sau"
-            >
-                <ChevronRightIcon className="w-6 h-6" />
-            </button>
-        </div>
       </div>
-      <div className="flex justify-center items-center gap-6">
-        <div className="text-sm text-gray-400">
-          Slide {currentIndex + 1} / {slides.length}
-        </div>
-         <button
-            onClick={togglePlay}
-            className="p-2 rounded-full hover:bg-slate-700 text-white transition-all duration-200 focus:outline-none focus:ring-2 ring-offset-2 ring-offset-slate-900 focus:ring-white"
-            aria-label={isPlaying ? "Tạm dừng trình chiếu" : "Phát trình chiếu"}
-        >
-            {isPlaying ? <PauseIcon className="w-6 h-6" /> : <PlayIcon className="w-6 h-6" />}
+
+      {/* Controls */}
+      <div className="absolute inset-0 flex items-center justify-between p-4 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+        <div className='absolute inset-0 bg-black/20'></div>
+        <button onClick={goToPrevious} className="relative z-10 p-2 bg-black/50 rounded-full text-white hover:bg-black/75 focus:outline-none focus:ring-2 focus:ring-white">
+          <ChevronLeftIcon className="w-6 h-6" />
         </button>
+        <button onClick={goToNext} className="relative z-10 p-2 bg-black/50 rounded-full text-white hover:bg-black/75 focus:outline-none focus:ring-2 focus:ring-white">
+          <ChevronRightIcon className="w-6 h-6" />
+        </button>
+      </div>
+
+      {/* Bottom Bar */}
+      <div className="absolute bottom-0 left-0 right-0 p-4 flex items-center justify-between bg-gradient-to-t from-black/60 to-transparent">
+        <button onClick={togglePlay} className="p-2 bg-black/50 rounded-full text-white hover:bg-black/75 focus:outline-none focus:ring-2 focus:ring-white">
+          {isPlaying ? <PauseIcon className="w-5 h-5" /> : <PlayIcon className="w-5 h-5" />}
+        </button>
+        <div className="text-white text-sm bg-black/50 px-2 py-1 rounded-md">
+          {currentIndex + 1} / {slides.length}
+        </div>
       </div>
     </div>
   );

@@ -5,11 +5,11 @@ import { FilmIcon, DownloadIcon } from './components/Icons';
 import { AspectRatio, Slide, Scene } from './types';
 import { generateScenesFromScript, generateImageForScene } from './services/geminiService';
 
-function App() {
+const App: React.FC = () => {
   const [slides, setSlides] = useState<Slide[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [duration, setDuration] = useState(60); // Default to 60 seconds (1 minute)
+  const [totalDuration, setTotalDuration] = useState(60); // Default to 60 seconds (1 minute)
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>('16:9');
   const [isDownloading, setIsDownloading] = useState(false);
 
@@ -37,22 +37,24 @@ function App() {
       }));
       setSlides(placeholderSlides);
 
-      // 3. Generate image for each scene one by one and update the slide
-      for (let i = 0; i < scenes.length; i++) {
-        const scene = scenes[i];
-        try {
-            const imageUrl = await generateImageForScene(scene.image_prompt, aspectRatio);
+      // 3. Generate images for all scenes in parallel
+      const imageGenerationPromises = scenes.map((scene, index) =>
+        generateImageForScene(scene.image_prompt, aspectRatio)
+          .then(imageUrl => {
             setSlides(prevSlides => {
               const newSlides = [...prevSlides];
-              newSlides[i] = { imageUrl };
+              newSlides[index] = { imageUrl };
               return newSlides;
             });
-        } catch (imageError) {
-            console.error(`Failed to generate image for scene ${i}:`, imageError);
-            // We can decide to show a broken image or skip this slide.
-            // For now, we'll just leave it without an image.
-        }
-      }
+          })
+          .catch(imageError => {
+            console.error(`Failed to generate image for scene ${index}:`, imageError);
+            // The slide for this index will remain a placeholder, showing the loading spinner.
+          })
+      );
+
+      await Promise.allSettled(imageGenerationPromises);
+
     } catch (err: any) {
       setError(err.message || 'Đã xảy ra lỗi không mong muốn.');
     } finally {
@@ -83,13 +85,22 @@ function App() {
   
       const stream = canvas.captureStream(30); // 30 FPS
       
-      const options = { mimeType: 'video/mp4; codecs=avc1' };
-      if (!MediaRecorder.isTypeSupported(options.mimeType)) {
-          console.warn('video/mp4; codecs=avc1 not supported, falling back to webm.');
-          options.mimeType = 'video/webm; codecs=vp9';
+      let fileExtension = 'mp4';
+      let mimeType = 'video/mp4; codecs=avc1.42E01E';
+      if (!MediaRecorder.isTypeSupported(mimeType)) {
+          console.warn(`${mimeType} not supported, falling back to vp9.`);
+          mimeType = 'video/webm; codecs=vp9';
+          if (!MediaRecorder.isTypeSupported(mimeType)) {
+            console.warn(`${mimeType} not supported, falling back to vp8.`);
+            mimeType = 'video/webm; codecs=vp8';
+            if (!MediaRecorder.isTypeSupported(mimeType)) {
+              throw new Error("Không có loại MIME video nào được hỗ trợ (mp4/webm vp9/webm vp8) để ghi.");
+            }
+          }
+          fileExtension = 'webm';
       }
   
-      const recorder = new MediaRecorder(stream, options);
+      const recorder = new MediaRecorder(stream, { mimeType });
       const chunks: Blob[] = [];
   
       recorder.ondataavailable = (e) => {
@@ -99,11 +110,11 @@ function App() {
       };
   
       recorder.onstop = () => {
-        const blob = new Blob(chunks, { type: 'video/mp4' });
+        const blob = new Blob(chunks, { type: mimeType.split(';')[0] });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'trinh-chieu.mp4';
+        a.download = `trinh-chieu.${fileExtension}`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -112,22 +123,33 @@ function App() {
       };
   
       recorder.start();
+      
+      // FIX: Removed shadowed slideDuration variable. The loop below will use the one from the component scope.
   
       for (const slide of slides) {
         const image = new Image();
         image.crossOrigin = "anonymous";
-        const imageLoaded = new Promise((resolve, reject) => {
-          image.onload = resolve;
+        const imageLoaded = new Promise<void>((resolve, reject) => {
+          image.onload = () => resolve();
           image.onerror = reject;
         });
         image.src = slide.imageUrl;
         await imageLoaded;
   
-        // Draw image
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+        // Draw image while maintaining aspect ratio
+        ctx.fillStyle = '#000'; // Black background for letterboxing
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        const hRatio = canvas.width / image.width;
+        const vRatio = canvas.height / image.height;
+        const ratio = Math.min(hRatio, vRatio);
+        const centerShiftX = (canvas.width - image.width * ratio) / 2;
+        const centerShiftY = (canvas.height - image.height * ratio) / 2;  
+
+        ctx.drawImage(image, 0, 0, image.width, image.height,
+                      centerShiftX, centerShiftY, image.width * ratio, image.height * ratio);
   
-        await new Promise(resolve => setTimeout(resolve, duration * 1000));
+        await new Promise(resolve => setTimeout(resolve, slideDuration * 1000));
       }
   
       recorder.stop();
@@ -137,6 +159,8 @@ function App() {
       setIsDownloading(false);
     }
   };
+
+  const slideDuration = slides.length > 0 ? totalDuration / slides.length : 0;
 
   return (
     <div className="bg-slate-900 text-white min-h-screen">
@@ -158,8 +182,8 @@ function App() {
             <ScriptInput 
               onGenerate={handleGenerate} 
               isLoading={isLoading}
-              duration={duration}
-              onDurationChange={setDuration}
+              duration={totalDuration}
+              onDurationChange={setTotalDuration}
               aspectRatio={aspectRatio}
               onAspectRatioChange={setAspectRatio}
             />
@@ -172,12 +196,12 @@ function App() {
           )}
 
           <div className="mt-8">
-            <Slideshow slides={slides} duration={duration} aspectRatio={aspectRatio} />
+            <Slideshow slides={slides} duration={slideDuration} aspectRatio={aspectRatio} />
             {slides.length > 0 && !isLoading && (
               <div className="mt-6 text-center">
                 <button
                   onClick={handleDownload}
-                  disabled={isDownloading}
+                  disabled={isDownloading || slides.some(s => !s.imageUrl)}
                   className="inline-flex items-center justify-center px-6 py-3 border border-transparent text-base font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-slate-900 focus:ring-green-500 disabled:bg-green-500/50 disabled:cursor-not-allowed transition-colors duration-200"
                 >
                   {isDownloading ? (
@@ -191,7 +215,7 @@ function App() {
                   ) : (
                     <>
                       <DownloadIcon className="w-5 h-5 mr-2" />
-                      Tải về video (.mp4)
+                      Tải về video
                     </>
                   )}
                 </button>
