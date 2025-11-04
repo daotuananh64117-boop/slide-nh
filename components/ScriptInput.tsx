@@ -26,7 +26,7 @@ const ScriptInput: React.FC<ScriptInputProps> = ({
     onGenerate(script);
   };
   
-  const exampleScript = `Lúc khởi đầu, Thiên Chúa tạo dựng trời và đất. Chúa phán, "Phải có ánh sáng," và có ánh sáng. Ngài thấy ánh sáng là tốt đẹp và Ngài phân chia ánh sáng khỏi bóng tối. Chúa tạo ra các lục địa và biển cả. Ngài làm cho cây cối và thực vật mọc lên trên mặt đất. Sau đó, Ngài tạo ra mặt trời, mặt trăng và các vì sao. Cuối cùng, Ngài tạo ra con người theo hình ảnh của Ngài và ban cho họ quyền cai quản mọi loài trên Trái Đất.`;
+  const exampleScript = `Mặt trời mọc trên những ngọn núi sương mù. Một nhà thám hiểm dũng cảm bắt đầu cuộc hành trình vào một khu rừng rậm rạp. Dòng sông chảy xiết chắn ngang con đường. Sau khi vượt qua, họ phát hiện ra một tàn tích cổ xưa ẩn sau một thác nước. Bên trong, những bức tường được bao phủ bởi những hình khắc phát sáng. Nhà thám hiểm tìm thấy một chiếc la bàn bí ẩn ở trung tâm.`;
 
   // Derived state from duration prop
   const minutes = Math.floor(duration / 60);

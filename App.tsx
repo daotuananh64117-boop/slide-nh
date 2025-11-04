@@ -3,7 +3,26 @@ import ScriptInput from './components/ScriptInput';
 import Slideshow from './components/Slideshow';
 import { FilmIcon, DownloadIcon } from './components/Icons';
 import { AspectRatio, Slide, TransitionEffect, Scene } from './types';
-import { generateScenesFromScript, generateImageForScene } from './services/geminiService';
+import { parseScriptToScenes, getImageUrlForScene, generateSearchQueriesForScene } from './services/geminiService';
+
+// Tiện ích tải ảnh với cơ chế thử lại, được điều chỉnh cho dịch vụ ảnh mới
+const loadImageWithRetries = (src: string, retries: number = 2): Promise<HTMLImageElement> => {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => resolve(img);
+    img.onerror = () => {
+      if (retries > 0) {
+        console.warn(`Không thể tải ảnh, đang thử lại... (${retries} lần thử còn lại)`);
+        // Yêu cầu lại cùng một URL, tham số `?random` sẽ xử lý việc lấy ảnh mới.
+        setTimeout(() => loadImageWithRetries(src, retries - 1).then(resolve).catch(reject), 500);
+      } else {
+        reject(new Error(`Không thể tải hình ảnh sau nhiều lần thử.`));
+      }
+    };
+    img.src = src;
+  });
+};
 
 const App: React.FC = () => {
   const [slides, setSlides] = useState<Slide[]>([]);
@@ -24,8 +43,7 @@ const App: React.FC = () => {
     setSlides([]);
 
     try {
-      // 1. Gọi AI của Gemini để phân tích kịch bản và tạo cảnh
-      const scenes: Scene[] = await generateScenesFromScript(script);
+      const scenes: Scene[] = parseScriptToScenes(script);
 
       if (scenes.length === 0) {
         throw new Error("Không thể tạo cảnh nào. Vui lòng thử một kịch bản khác.");
@@ -33,66 +51,99 @@ const App: React.FC = () => {
       
       const transitions: TransitionEffect[] = ['fade', 'slide-left', 'zoom-in'];
 
-      // 2. Tạo cấu trúc slide ban đầu không có hình ảnh
       const initialSlides: Slide[] = scenes.map((scene, index) => ({
         id: `slide-${index}-${Date.now()}`,
-        imageUrl: '', // Ban đầu trống, sẽ được điền vào dần dần
+        imageUrl: null,
         text: scene.description,
         transition: transitions[Math.floor(Math.random() * transitions.length)],
+        statusText: 'Đang chuẩn bị...',
       }));
       
       setSlides(initialSlides);
-      setIsLoading(false); // Dừng tải chính, hiển thị các slide trống
 
-      // 3. Tạo hình ảnh cho mỗi slide trong nền
-      scenes.forEach(async (scene, index) => {
+      const imageLoadPromises = initialSlides.map(async (slide) => {
         try {
-          const imageUrl = await generateImageForScene(scene.description);
-          setSlides(prevSlides => 
-            prevSlides.map((slide, i) => 
-              i === index ? { ...slide, imageUrl, error: undefined } : slide
-            )
-          );
-        } catch (imageError: any) {
-          console.error(`Không thể tạo hình ảnh cho slide ${index + 1}:`, imageError);
-          // Cập nhật slide cụ thể để hiển thị trạng thái lỗi
-          setSlides(prevSlides => 
-            prevSlides.map((slide, i) => 
-              i === index ? { ...slide, imageUrl: 'error', error: imageError.message } : slide
-            )
-          );
+          // Lần thử 1: Tải trực tiếp dựa trên văn bản gốc
+          setSlides(prev => prev.map(s => s.id === slide.id ? { ...s, statusText: 'Đang tìm ảnh...' } : s));
+          const initialImageUrl = getImageUrlForScene(slide.text, aspectRatio);
+          const loadedImage = await loadImageWithRetries(initialImageUrl);
+          setSlides(prev => prev.map(s => s.id === slide.id ? { ...s, imageUrl: loadedImage.src, error: undefined, statusText: undefined } : s));
+        } catch (err) {
+          console.warn(`Lần thử 1 thất bại cho "${slide.text}". Đang dùng AI để tìm kiếm nâng cao.`);
+          try {
+            // Lần thử 2: Tạo truy vấn tìm kiếm kiểu Google bằng AI và thử lại
+            setSlides(prev => prev.map(s => s.id === slide.id ? { ...s, statusText: 'AI đang phân tích cảnh...' } : s));
+            const newSearchQueries = await generateSearchQueriesForScene(slide.text);
+            
+            setSlides(prev => prev.map(s => s.id === slide.id ? { ...s, statusText: `AI đang tìm: "${newSearchQueries}"` } : s));
+
+            const rewrittenImageUrl = getImageUrlForScene(slide.text, aspectRatio, newSearchQueries);
+            const loadedImage = await loadImageWithRetries(rewrittenImageUrl);
+            setSlides(prev => prev.map(s => s.id === slide.id ? { ...s, imageUrl: loadedImage.src, error: undefined, statusText: undefined } : s));
+          } catch (rewriteErr) {
+            console.warn(`Lần thử 2 (với truy vấn AI) thất bại cho "${slide.text}". Sử dụng ảnh dự phòng.`);
+            try {
+              // Lần thử 3: Sử dụng từ khóa chung, trung tính làm giải pháp cuối cùng
+              setSlides(prev => prev.map(s => s.id === slide.id ? { ...s, statusText: 'Đang tìm ảnh dự phòng...' } : s));
+              const genericKeywords = 'abstract,texture,nature,background,pattern';
+              const genericImageUrl = getImageUrlForScene('fallback', aspectRatio, genericKeywords);
+              const genericLoadedImage = await loadImageWithRetries(genericImageUrl);
+
+              setSlides(prev => 
+                prev.map(s => s.id === slide.id ? { ...s, imageUrl: genericLoadedImage.src, error: undefined, statusText: undefined } : s)
+              );
+            } catch (genericErr) {
+              console.error(`Tất cả các lần thử tải ảnh đều thất bại cho "${slide.text}".`, genericErr);
+              setSlides(prev => 
+                prev.map(s => s.id === slide.id ? { ...s, error: "Không thể tải ảnh.", statusText: undefined } : s)
+              );
+            }
+          }
         }
       });
+      // Đợi tất cả các nỗ lực tải ảnh được giải quyết
+      await Promise.allSettled(imageLoadPromises);
 
     } catch (err: any) {
       setError(err.message || 'Đã xảy ra lỗi không mong muốn.');
-      setIsLoading(false); // Cũng dừng tải khi có lỗi ban đầu
+    } finally {
+      setIsLoading(false);
     }
   };
 
   const handleDownload = async () => {
-    if (slides.length === 0 || slides.some(s => !s.imageUrl || s.imageUrl === 'error')) {
-      setError("Vui lòng đợi tất cả hình ảnh được tạo xong và không có lỗi trước khi tải về.");
+    const validSlides = slides.filter(s => s.imageUrl);
+    if (validSlides.length === 0) {
+      setError("Không có slide hợp lệ nào để tải về.");
       return;
     }
+     if (validSlides.length !== slides.length) {
+      setError("Một số hình ảnh không thể tải. Vui lòng thử tạo lại trước khi tải về.");
+      return;
+    }
+
     setIsDownloading(true);
     setError(null);
 
-    const TRANSITION_DURATION = 1.0; // in seconds
-    const slideDuration = slides.length > 0 
-      ? (totalDuration - (slides.length - 1) * TRANSITION_DURATION) / slides.length
-      : 0;
+    const FRAME_RATE = 30;
+    const TRANSITION_DURATION = 1.0; // giây
 
-    if (slideDuration <= 0) {
-      setError(`Tổng thời lượng quá ngắn cho ${slides.length} slide và các hiệu ứng chuyển cảnh. Vui lòng tăng thời lượng.`);
-      setIsDownloading(false);
-      return;
+    // Tính toán thời lượng thực tế dựa trên khung hình để đảm bảo độ chính xác
+    const totalFrames = Math.round(totalDuration * FRAME_RATE);
+    const actualTotalDuration = totalFrames / FRAME_RATE;
+    
+    const minDurationForTransitions = (validSlides.length > 1) ? (validSlides.length - 1) * TRANSITION_DURATION : 0;
+    if (actualTotalDuration <= minDurationForTransitions) {
+        setError(`Tổng thời lượng quá ngắn cho ${validSlides.length} slide. Cần ít nhất ${minDurationForTransitions.toFixed(1)} giây cho các hiệu ứng chuyển cảnh. Vui lòng tăng thời lượng.`);
+        setIsDownloading(false);
+        return;
     }
+    const slideDuration = (actualTotalDuration - minDurationForTransitions) / validSlides.length;
   
     try {
       const canvas = document.createElement('canvas');
       const aspectRatioParts = aspectRatio.split(':').map(Number);
-      const canvasWidth = 1280; // Standard HD width
+      const canvasWidth = 1280;
       const canvasHeight = Math.round((canvasWidth * aspectRatioParts[1]) / aspectRatioParts[0]);
       canvas.width = canvasWidth;
       canvas.height = canvasHeight;
@@ -101,19 +152,6 @@ const App: React.FC = () => {
       if (!ctx) {
         throw new Error("Không thể tạo video. Canvas context không được hỗ trợ.");
       }
-
-      const loadImage = (src: string): Promise<HTMLImageElement> => {
-          return new Promise((resolve, reject) => {
-              const img = new Image();
-              // For base64 URLs, we don't need CORS or cache busting
-              if (!src.startsWith('data:')) {
-                  img.crossOrigin = "anonymous";
-              }
-              img.onload = () => resolve(img);
-              img.onerror = () => reject(new Error(`Không thể tải hình ảnh.`));
-              img.src = src;
-          });
-      };
 
       const drawImageFit = (ctx: CanvasRenderingContext2D, img: HTMLImageElement, scale = 1, offsetX = 0, offsetY = 0) => {
           const canvas = ctx.canvas;
@@ -139,7 +177,7 @@ const App: React.FC = () => {
           }
       }
 
-      const stream = canvas.captureStream();
+      const stream = canvas.captureStream(FRAME_RATE);
       const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 3000000 });
       const chunks: Blob[] = [];
   
@@ -167,79 +205,80 @@ const App: React.FC = () => {
         recorder.onerror = (event) => reject(new Error("Lỗi xảy ra trong quá trình ghi video."));
         
         try {
-            const images = await Promise.all(slides.map(slide => loadImage(slide.imageUrl)));
+            const images = await Promise.all(validSlides.map(slide => loadImageWithRetries(slide.imageUrl!)));
             
-            const totalVideoDurationMs = totalDuration * 1000;
-            const slideDurationMs = slideDuration * 1000;
-            const transitionDurationMs = TRANSITION_DURATION * 1000;
-            const timePerSlideAndTransition = slideDurationMs + transitionDurationMs;
-
-            const renderFrame = (elapsedTimeMs: number) => {
-                const slideIndex = Math.min(images.length - 1, Math.floor(elapsedTimeMs / timePerSlideAndTransition));
-                const timeIntoCurrentBlock = elapsedTimeMs - (slideIndex * timePerSlideAndTransition);
-                const currentImage = images[slideIndex];
-
-                ctx.fillStyle = '#000';
-                ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-                if (slideIndex === images.length - 1 || timeIntoCurrentBlock <= slideDurationMs) {
-                    const progress = Math.min(1, timeIntoCurrentBlock / slideDurationMs);
-                    const scale = 1 + progress * 0.1; // Ken Burns effect
-                    drawImageFit(ctx, currentImage, scale);
-                } else {
-                    const nextImage = images[slideIndex + 1];
-                    const transition = slides[slideIndex + 1]?.transition;
-                    const progress = (timeIntoCurrentBlock - slideDurationMs) / transitionDurationMs;
-                    const previousImage = currentImage;
-
-                    switch (transition) {
-                        case 'fade':
-                            ctx.globalAlpha = 1 - progress;
-                            drawImageFit(ctx, previousImage, 1.1);
-                            ctx.globalAlpha = progress;
-                            drawImageFit(ctx, nextImage, 1);
-                            ctx.globalAlpha = 1;
-                            break;
-                        case 'slide-left':
-                            const moveX = canvas.width * progress;
-                            drawImageFit(ctx, previousImage, 1.1, -moveX);
-                            drawImageFit(ctx, nextImage, 1, canvas.width - moveX);
-                            break;
-                        case 'zoom-in':
-                            drawImageFit(ctx, previousImage, 1.1);
-                            ctx.globalAlpha = progress;
-                            drawImageFit(ctx, nextImage, 0.5 + progress * 0.5);
-                            ctx.globalAlpha = 1;
-                            break;
-                        default:
-                            drawImageFit(ctx, previousImage, 1.1);
-                            break;
-                    }
+            // Tính toán dòng thời gian dựa trên khung hình chính xác
+            const transitionFrames = Math.round(TRANSITION_DURATION * FRAME_RATE);
+            const slideFrames = Math.round(slideDuration * FRAME_RATE);
+            
+            const frameTimeline: any[] = [];
+            let currentFrame = 0;
+            for (let i = 0; i < validSlides.length; i++) {
+                frameTimeline.push({ type: 'slide', index: i, startFrame: currentFrame, endFrame: currentFrame + slideFrames });
+                currentFrame += slideFrames;
+                if (i < validSlides.length - 1) {
+                    frameTimeline.push({ type: 'transition', fromIndex: i, toIndex: i + 1, startFrame: currentFrame, endFrame: currentFrame + transitionFrames });
+                    currentFrame += transitionFrames;
                 }
-            };
+            }
+            if (frameTimeline.length > 0) {
+              frameTimeline[frameTimeline.length - 1].endFrame = totalFrames;
+            }
             
             recorder.start();
             
-            const FRAME_RATE = 30; // Giảm tốc độ khung hình để tăng hiệu suất
-            const FRAME_DURATION_MS = 1000 / FRAME_RATE;
-            let virtualTimeMs = 0;
+            for (let i = 0; i < totalFrames; i++) {
+                const event = frameTimeline.find(e => i >= e.startFrame && i < e.endFrame);
+                
+                ctx.fillStyle = '#000';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-            // Vòng lặp render chính xác hơn
-            while (virtualTimeMs < totalVideoDurationMs) {
-                renderFrame(virtualTimeMs);
-                virtualTimeMs += FRAME_DURATION_MS;
+                if (event) {
+                    if (event.type === 'slide') {
+                        const progress = (i - event.startFrame) / (event.endFrame - event.startFrame);
+                        const scale = 1 + progress * 0.1; // Ken Burns
+                        drawImageFit(ctx, images[event.index], scale);
+                    } else if (event.type === 'transition') {
+                        const progress = (i - event.startFrame) / (event.endFrame - event.startFrame);
+                        const fromImage = images[event.fromIndex];
+                        const toImage = images[event.toIndex];
+                        const transition = validSlides[event.toIndex]?.transition;
 
-                // Tạm dừng để event loop chạy, tránh làm treo trình duyệt
-                if (Math.round(virtualTimeMs) % 250 < FRAME_DURATION_MS) {
+                        switch (transition) {
+                            case 'fade':
+                                ctx.globalAlpha = 1 - progress;
+                                drawImageFit(ctx, fromImage, 1.1);
+                                ctx.globalAlpha = progress;
+                                drawImageFit(ctx, toImage, 1);
+                                ctx.globalAlpha = 1;
+                                break;
+                            case 'slide-left':
+                                const moveX = canvas.width * progress;
+                                drawImageFit(ctx, fromImage, 1.1, -moveX);
+                                drawImageFit(ctx, toImage, 1, canvas.width - moveX);
+                                break;
+                            case 'zoom-in':
+                                drawImageFit(ctx, fromImage, 1.1);
+                                ctx.globalAlpha = progress;
+                                drawImageFit(ctx, toImage, 0.5 + progress * 0.5);
+                                ctx.globalAlpha = 1;
+                                break;
+                            default:
+                                drawImageFit(ctx, fromImage, 1.1);
+                                break;
+                        }
+                    }
+                } else if (i >= totalFrames - 1 && images.length > 0) {
+                     drawImageFit(ctx, images[images.length - 1], 1.1);
+                }
+
+                if (i % 10 === 0) {
                     await new Promise(r => setTimeout(r, 0));
                 }
             }
             
-            // Render khung hình cuối cùng để đảm bảo video có đủ thời lượng
-            renderFrame(totalVideoDurationMs);
-            
             if (recorder.state === 'recording') {
-                recorder.stop(); // onstop sẽ gọi resolve()
+                recorder.stop();
             }
 
         } catch(err) {
@@ -253,6 +292,8 @@ const App: React.FC = () => {
       setIsDownloading(false);
     }
   };
+  
+  const areAllImagesLoaded = slides.length > 0 && slides.every(s => s.imageUrl);
 
   const previewSlideDuration = slides.length > 0 ? totalDuration / slides.length : 0;
 
@@ -263,7 +304,7 @@ const App: React.FC = () => {
           <div className="flex items-center justify-center gap-3">
             <FilmIcon className="w-8 h-8 md:w-10 md:h-10 text-indigo-400" />
             <h1 className="text-3xl md:text-4xl font-bold tracking-tight bg-gradient-to-r from-indigo-400 to-cyan-400 text-transparent bg-clip-text">
-              Trình tạo trình chiếu AI
+              Trình tạo trình chiếu
             </h1>
           </div>
           <p className="mt-3 text-lg text-slate-400">
@@ -295,7 +336,7 @@ const App: React.FC = () => {
               <div className="mt-6 text-center">
                 <button
                   onClick={handleDownload}
-                  disabled={isDownloading || slides.some(s => !s.imageUrl || s.imageUrl === 'error')}
+                  disabled={isDownloading || !areAllImagesLoaded}
                   className="inline-flex items-center justify-center px-6 py-3 border border-transparent text-base font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-slate-900 focus:ring-green-500 disabled:bg-green-500/50 disabled:cursor-not-allowed transition-colors duration-200"
                 >
                   {isDownloading ? (
@@ -313,13 +354,16 @@ const App: React.FC = () => {
                     </>
                   )}
                 </button>
+                 {!areAllImagesLoaded && !isDownloading && (
+                    <p className="text-sm text-slate-400 mt-2">Đang tải hình ảnh, vui lòng đợi...</p>
+                 )}
               </div>
             )}
           </div>
         </main>
         
         <footer className="text-center mt-12 text-slate-500 text-sm">
-          <p>Hình ảnh được tạo bởi AI của Google. Giao diện được lấy cảm hứng từ các công cụ tạo video AI khác nhau.</p>
+          <p>Hình ảnh được cung cấp miễn phí bởi Unsplash. Giao diện được lấy cảm hứng từ các công cụ tạo video AI khác nhau.</p>
         </footer>
       </div>
     </div>

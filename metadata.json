@@ -1,5 +1,5 @@
 {
   "name": "Trình tạo slide truyện",
-  "description": "Một ứng dụng tạo trình chiếu hình ảnh từ kịch bản do người dùng cung cấp bằng AI. AI phân tích kịch bản để tạo cảnh, tạo một hình ảnh độc đáo cho mỗi cảnh và trình bày chúng ở định dạng trình chiếu có phụ đề.",
+  "description": "Một ứng dụng tạo trình chiếu hình ảnh từ kịch bản. Ứng dụng phân tích kịch bản, tìm kiếm hình ảnh miễn phí và sử dụng AI để tạo ra các truy vấn tìm kiếm nâng cao, giúp tìm được hình ảnh phù hợp nhất, tương tự như khi tìm kiếm trên Google.",
   "requestFramePermissions": []
 }

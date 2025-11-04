@@ -1,125 +1,106 @@
-import { GoogleGenAI, Type, Modality } from '@google/genai';
-import { Scene } from '../types';
+import { GoogleGenAI } from "@google/genai";
+import { Scene, AspectRatio } from '../types';
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+let ai: GoogleGenAI | null = null;
+const getAI = () => {
+    if (!ai) {
+        if (!process.env.API_KEY) {
+            // Không khởi tạo nếu không có API key
+            console.error("API key for Gemini is not configured.");
+            return null;
+        }
+        ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    }
+    return ai;
+}
 
-const sceneSchema = {
-  type: Type.OBJECT,
-  properties: {
-    description: {
-      type: Type.STRING,
-      description: 'Mô tả chi tiết và ngắn gọn về cảnh này, thường là một câu từ kịch bản gốc.'
-    },
-  },
-  required: ['description']
+/**
+ * Phân tích kịch bản thành các cảnh bằng cách tách câu.
+ * @param script Kịch bản đầy đủ do người dùng cung cấp.
+ * @returns Một mảng các đối tượng Scene.
+ */
+export const parseScriptToScenes = (script: string): Scene[] => {
+  if (!script.trim()) return [];
+  // Tách câu dựa trên các dấu câu kết thúc câu. Giữ lại dấu câu.
+  const sentences = script.match(/[^.!?]+[.!?]+/g) || [script];
+  return sentences
+    .map(s => s.trim())
+    .filter(s => s.length > 5) // Lọc bỏ các đoạn quá ngắn
+    .map(description => ({ description }));
 };
 
-export const generateImageForScene = async (description: string): Promise<string> => {
-  // Helper function to abstract the actual image generation call
-  const createImage = async (prompt: string): Promise<string> => {
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash-image',
-      contents: { parts: [{ text: prompt }] },
-      config: {
-        responseModalities: [Modality.IMAGE],
-      },
-    });
 
-    if (response.promptFeedback?.blockReason) {
-      throw new Error(`Bị chặn: ${response.promptFeedback.blockReason}. ${response.promptFeedback.blockReasonMessage || ''}`);
+/**
+ * Sử dụng AI để tạo ra các truy vấn tìm kiếm giống như Google cho một cảnh phức tạp.
+ * @param sceneDescription Mô tả cảnh gốc.
+ * @returns Một chuỗi các truy vấn tìm kiếm được phân tách bằng dấu phẩy.
+ */
+export const generateSearchQueriesForScene = async (sceneDescription: string): Promise<string> => {
+    const aiInstance = getAI();
+    if (!aiInstance) {
+        throw new Error("Dịch vụ AI không có sẵn để tạo truy vấn tìm kiếm.");
     }
 
-    const firstCandidate = response.candidates?.[0];
+    const prompt = `Analyze the following scene description from a script. Your task is to generate 3 to 5 highly descriptive, artistic search queries for a stock photo website like Unsplash. These queries should capture the visual elements, mood, and style of the scene.
 
-    if (!firstCandidate || firstCandidate.finishReason === 'RECITATION' || firstCandidate.finishReason === 'SAFETY') {
-      throw new Error(`Lý do an toàn hoặc trích dẫn.`);
-    }
+RULES:
+- ONLY output the search queries.
+- The queries must be a single line of text.
+- Each query must be separated by a comma.
+- Do NOT add any intro, explanation, or quotation marks around the output.
 
-    for (const part of firstCandidate.content.parts) {
-      if (part.inlineData) {
-        const base64ImageBytes: string = part.inlineData.data;
-        return `data:${part.inlineData.mimeType};base64,${base64ImageBytes}`;
-      }
-    }
-    
-    throw new Error("Không có dữ liệu hình ảnh nào được trả về từ AI.");
-  };
-
-  const initialPrompt = `Một bức tranh kỹ thuật số theo phong cách điện ảnh, hoành tráng, đầy cảm hứng về: "${description}". Hình ảnh nên gợi lên cảm giác kính sợ và thiêng liêng.`;
-  
-  try {
-    // First attempt with the original description
-    return await createImage(initialPrompt);
-  } catch (initialError: any) {
-    console.warn(`Lần thử tạo hình ảnh đầu tiên thất bại cho "${description}": ${initialError.message}. Thử lại với lời nhắc được đơn giản hóa.`);
+SCENE: "${sceneDescription}"
+SEARCH QUERIES:`;
 
     try {
-      // Fallback: Use a text model to simplify the abstract description into a visual one.
-      const simplifierResponse = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: `Tóm tắt khái niệm trừu tượng hoặc phức tạp sau đây thành một mô tả cảnh đơn giản, trực quan, phù hợp để tạo hình ảnh. Tập trung vào các yếu tố cụ thể, mang tính biểu tượng. Trả về một cụm từ ngắn gọn bằng tiếng Việt. Khái niệm: "${description}"`,
-      });
-      const simplifiedDescription = simplifierResponse.text.trim();
-
-      if (!simplifiedDescription) {
-        throw new Error("Không thể đơn giản hóa mô tả.");
-      }
-      
-      console.log(`Mô tả được đơn giản hóa: "${simplifiedDescription}"`);
-      
-      const fallbackPrompt = `Một bức tranh kỹ thuật số theo phong cách điện ảnh, hoành tráng, đầy cảm hứng về khái niệm mang tính biểu tượng của: "${simplifiedDescription}". Hình ảnh nên gợi lên cảm giác kính sợ và thiêng liêng.`;
-
-      // Second attempt with the simplified description
-      return await createImage(fallbackPrompt);
-
-    } catch (fallbackError: any) {
-      console.error(`Lần thử tạo hình ảnh thứ hai cũng thất bại cho "${description}":`, fallbackError);
-      
-      let userMessage = `Không thể tạo hình ảnh cho cảnh: "${description}".`;
-      if (initialError.message.includes('bị chặn') || (fallbackError.message && fallbackError.message.includes('bị chặn'))) {
-          userMessage = `Không thể tạo hình ảnh cho cảnh "${description}" vì nội dung bị chặn, ngay cả sau khi thử đơn giản hóa nó. Vui lòng sửa đổi mô tả cảnh này.`;
-      } else if (initialError.message.includes('an toàn') || (fallbackError.message && fallbackError.message.includes('an toàn'))) {
-          userMessage = `Không thể tạo hình ảnh cho cảnh "${description}" vì lý do an toàn, ngay cả sau khi thử đơn giản hóa nó. Vui lòng sửa đổi mô tả cảnh này.`;
-      }
-      throw new Error(userMessage);
+        const response = await aiInstance.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: prompt,
+        });
+        // Dọn dẹp phản hồi để an toàn hơn
+        const queries = response.text.trim().replace(/"/g, '').replace(/\.$/, ''); // xóa dấu ngoặc kép và dấu chấm cuối câu
+        if (!queries) {
+          throw new Error("AI đã trả về truy vấn tìm kiếm trống.");
+        }
+        return queries;
+    } catch (error) {
+        console.error("Lỗi khi tạo truy vấn tìm kiếm bằng AI:", error);
+        throw new Error("AI không thể tạo truy vấn tìm kiếm. Mô hình có thể không khả dụng hoặc yêu cầu đã bị chặn.");
     }
-  }
 };
 
-export const generateScenesFromScript = async (script: string): Promise<Scene[]> => {
-  try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: `Phân tích kịch bản sau đây và chỉ trích xuất những câu mô tả cảnh hoặc hành động có thể hình dung được. Bỏ qua mọi câu hỏi, lời kêu gọi hành động, lời chào hoặc văn bản phi mô tả khác không thể minh họa bằng hình ảnh. Chia các câu có thể hình dung được thành một chuỗi các cảnh riêng biệt. Mỗi cảnh nên tương ứng với một câu hoặc một ý tưởng hoàn chỉnh. Trả về kết quả dưới dạng một mảng các đối tượng JSON. Kịch bản: "${script}"`,
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: Type.ARRAY,
-          items: sceneSchema
-        },
-      },
-    });
-    
-    const jsonText = response.text.trim();
-    const scenes = JSON.parse(jsonText);
 
-    if (!Array.isArray(scenes)) { // Allow empty array if no visual scenes are found
-      throw new Error("AI không thể tạo ra bất kỳ cảnh nào từ kịch bản được cung cấp.");
-    }
-    
-    // Validate that scenes have the correct structure, even if the array is empty
-    const validScenes = scenes.filter(scene => typeof scene.description === 'string');
-    if(validScenes.length !== scenes.length) {
-        throw new Error("Định dạng cảnh do AI trả về không hợp lệ.");
-    }
+/**
+ * Tạo một URL đến Pிக்.photos để lấy một hình ảnh ngẫu nhiên, miễn phí và phù hợp.
+ * @param description Mô tả cảnh để trích xuất từ khóa (chỉ dùng nếu không có chuỗi truy vấn).
+ * @param aspectRatio Tỷ lệ khung hình của hình ảnh.
+ * @param query (Tùy chọn) Một chuỗi truy vấn tìm kiếm được tạo sẵn (ví dụ: từ AI).
+ * @returns Một chuỗi URL trỏ đến một hình ảnh.
+ */
+export const getImageUrlForScene = (description: string, aspectRatio: AspectRatio, query?: string): string => {
+  const [width, height] = aspectRatio === '16:9' ? [1280, 720] : [720, 1280];
+  
+  let searchTerms: string;
 
-    return validScenes;
-
-  } catch (error) {
-    console.error("Lỗi khi tạo cảnh bằng Gemini:", error);
-    if (error instanceof SyntaxError) {
-        throw new Error("Không thể phân tích phản hồi từ AI. Vui lòng thử lại.");
-    }
-    throw new Error("Đã xảy ra lỗi khi giao tiếp với AI để phân tích kịch bản.");
+  if (query) {
+      searchTerms = query;
+  } else {
+      // Trích xuất từ khóa đơn giản, loại bỏ các từ không cần thiết
+      const stopwords = ['a', 'an', 'the', 'in', 'on', 'at', 'for', 'to', 'of', 'with', 'is', 'are', 'was', 'were', 'it', 'its', 'like'];
+      const sceneKeywords = description
+        .toLowerCase()
+        .replace(/[^a-z\s]/g, '') // Chỉ giữ lại ký tự chữ và khoảng trắng
+        .split(/\s+/)
+        .filter(word => word.length > 3 && !stopwords.includes(word)) // Lọc từ ngắn và stopwords
+        .slice(0, 5); // Lấy tối đa 5 từ khóa
+      
+      if (sceneKeywords.length === 0) {
+          searchTerms = 'inspirational'; 
+      } else {
+          searchTerms = [...new Set(sceneKeywords)].join(',');
+      }
   }
+      
+  // Sử dụng dịch vụ pics.photos mới, đáng tin cậy hơn
+  return `https://pics.photos/${width}/${height}?random&search=${encodeURIComponent(searchTerms)}`;
 };
