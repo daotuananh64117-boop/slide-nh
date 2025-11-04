@@ -32,9 +32,8 @@ function App() {
       }
 
       // 2. Create placeholder slides
-      const placeholderSlides = scenes.map(scene => ({
+      const placeholderSlides = scenes.map(() => ({
         imageUrl: '',
-        caption: scene.caption
       }));
       setSlides(placeholderSlides);
 
@@ -45,7 +44,7 @@ function App() {
             const imageUrl = await generateImageForScene(scene.image_prompt, aspectRatio);
             setSlides(prevSlides => {
               const newSlides = [...prevSlides];
-              newSlides[i] = { ...newSlides[i], imageUrl };
+              newSlides[i] = { imageUrl };
               return newSlides;
             });
         } catch (imageError) {
@@ -127,43 +126,6 @@ function App() {
         // Draw image
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
-  
-        // Draw caption overlay (gradient)
-        const gradientHeight = Math.min(canvas.height * 0.4, 150);
-        const gradient = ctx.createLinearGradient(0, canvas.height, 0, canvas.height - gradientHeight);
-        gradient.addColorStop(0, 'rgba(0, 0, 0, 0.8)');
-        gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
-        ctx.fillStyle = gradient;
-        ctx.fillRect(0, canvas.height - gradientHeight, canvas.width, gradientHeight);
-  
-        // Draw caption text
-        ctx.fillStyle = 'white';
-        ctx.textAlign = 'center';
-        const fontSize = Math.max(16, canvas.width / 45);
-        ctx.font = `500 ${fontSize}px sans-serif`;
-        
-        const words = slide.caption.split(' ');
-        let line = '';
-        const lines = [];
-        const maxWidth = canvas.width * 0.9;
-        for (let n = 0; n < words.length; n++) {
-          const testLine = line + words[n] + ' ';
-          const metrics = ctx.measureText(testLine);
-          if (metrics.width > maxWidth && n > 0) {
-            lines.push(line);
-            line = words[n] + ' ';
-          } else {
-            line = testLine;
-          }
-        }
-        lines.push(line);
-  
-        const lineHeight = fontSize * 1.3;
-        const startY = canvas.height - (lines.length * lineHeight) - (fontSize * 0.8);
-  
-        for (let i = 0; i < lines.length; i++) {
-          ctx.fillText(lines[i].trim(), canvas.width / 2, startY + (i * lineHeight));
-        }
   
         await new Promise(resolve => setTimeout(resolve, duration * 1000));
       }

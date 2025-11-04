@@ -11,12 +11,12 @@ export async function generateScenesFromScript(script: string): Promise<Scene[]>
   // Use gemini-2.5-flash for efficient text processing and JSON generation.
   const model = 'gemini-2.5-flash';
 
-  const prompt = `Phân tích kịch bản sau đây và chia nó thành một chuỗi các cảnh. Đối với mỗi cảnh, hãy tạo một lời nhắc hình ảnh chi tiết để tạo hình ảnh và một chú thích ngắn gọn.
+  const prompt = `Phân tích kịch bản sau đây và chia nó thành một chuỗi các cảnh. Đối với mỗi cảnh, hãy tạo một lời nhắc hình ảnh chi tiết bằng tiếng Anh để tạo ra hình ảnh phù hợp nhất.
   
 Kịch bản:
 "${script}"
 
-Trả lời ở định dạng JSON là một mảng các đối tượng, mỗi đối tượng có các khóa "image_prompt" và "caption". Lời nhắc hình ảnh phải bằng tiếng Anh để tạo hình ảnh tốt nhất. Chú thích phải bằng tiếng Việt.`;
+Trả lời ở định dạng JSON là một mảng các đối tượng, mỗi đối tượng chỉ có một khóa duy nhất là "image_prompt".`;
   
   try {
     const response = await ai.models.generateContent({
@@ -32,13 +32,9 @@ Trả lời ở định dạng JSON là một mảng các đối tượng, mỗi
               image_prompt: {
                 type: Type.STRING,
                 description: "A detailed, descriptive English prompt for an AI image generator to create a scene from the script."
-              },
-              caption: {
-                type: Type.STRING,
-                description: "A short, descriptive Vietnamese caption for the scene."
               }
             },
-            required: ["image_prompt", "caption"]
+            required: ["image_prompt"]
           }
         }
       }

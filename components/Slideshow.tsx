@@ -86,7 +86,7 @@ const Slideshow: React.FC<SlideshowProps> = ({ slides, duration, aspectRatio }) 
     <div className={containerClass}>
       <div className={slideshowClass}>
         {currentSlide.imageUrl ? (
-            <img src={currentSlide.imageUrl} alt={currentSlide.caption} className="w-full h-full object-cover" />
+            <img src={currentSlide.imageUrl} alt={`Slide ${currentIndex + 1}`} className="w-full h-full object-cover" />
         ) : (
             <div className="w-full h-full flex items-center justify-center">
                  <div className="w-8 h-8 border-2 border-dashed rounded-full animate-spin border-slate-400"></div>
@@ -115,12 +115,6 @@ const Slideshow: React.FC<SlideshowProps> = ({ slides, duration, aspectRatio }) 
             >
                 <ChevronRightIcon className="w-6 h-6" />
             </button>
-        </div>
-
-        <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-4 pt-12">
-            <p className="text-white text-center text-sm md:text-base font-medium drop-shadow-lg">
-                {currentSlide.caption}
-            </p>
         </div>
       </div>
       <div className="flex justify-center items-center gap-6">
